@@ -62,3 +62,7 @@ https://www.pixiv.net/artworks/134040248 +3 -des
 ![](/images/5-telegram-pixiv-pages-example.png)
 
 </details>
+
+## 搭建
+
+请在`.env`中配置TOKEN, 与代理(如需, 支持`socks5`, `http`, `https`)

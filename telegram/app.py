@@ -1,12 +1,19 @@
+import os
+import re
+from dotenv import load_dotenv
 from telegram import Update, InputMediaPhoto
 from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, ContextTypes, filters
 
 from twitter_parser import match_twitter_url, fetch_tweet_data
 from pixiv_parser import match_pixiv_url, fetch_pixiv_data
 from stats_manager import load_stats, save_stats
-import re
 
-BOT_TOKEN = "7821306663:AAH9pBWK4UMocn6w50RPJ7tFDwsUJuUpglE"
+load_dotenv()
+proxy = os.getenv("PROXY", "").strip()
+if proxy:
+    os.environ["HTTP_PROXY"] = proxy
+    os.environ["HTTPS_PROXY"] = proxy
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 stats = load_stats()
 START_MESSAGE_MD = r"""
 发送 *Twitter* 或 *Pixiv* 链接，机器人将自动解析并转发图片\.
