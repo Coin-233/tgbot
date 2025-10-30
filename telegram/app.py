@@ -8,6 +8,33 @@ import re
 
 BOT_TOKEN = "7821306663:AAH9pBWK4UMocn6w50RPJ7tFDwsUJuUpglE"
 stats = load_stats()
+START_MESSAGE_MD = r"""
+发送 *Twitter* 或 *Pixiv* 链接，机器人将自动解析并转发图片\.
+
+Pixiv 解析指令
+
+对于 Pixiv 链接，可在链接后添加以下参数：
+
+1\. 分页 \(\+pages\)
+用于获取指定图片，支持多种格式：
+
+• `\+1`：第 1 张
+• `\+1,2,5`：获取第 1、2、5 张
+• `\+1-3`：获取第 1 到第 3 张
+
+2\. 信息去除 \(\- 参数\)
+用于移除图片描述信息：
+
+• `\-all`：去除简介和 Tag
+• `\-des`：去除简介
+• `\-tag`：去除 Tag
+
+混合使用示例: `https://www.pixiv.net/artworks/ID \+3 \-des`
+
+其他命令
+
+• `/stat`：查看总解析统计信息\.
+"""
 
 
 def escape_markdown_v2(text: str) -> str:
@@ -123,6 +150,10 @@ async def handle_pixiv(update: Update, parse_input: str, display_url: str):
     await send_media(update, images, caption_md)
 
 
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(START_MESSAGE_MD, parse_mode="MarkdownV2")
+
+
 async def stat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (f"统计信息：\n"
            f"• 总解析链接：{stats['total_links']} 条\n"
@@ -132,9 +163,11 @@ async def stat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start_command))
+    app.add_handler(CommandHandler("stat", stat_command))
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.add_handler(CommandHandler("stat", stat_command))
+
     app.run_polling()
 
 
