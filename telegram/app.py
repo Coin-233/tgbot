@@ -63,13 +63,38 @@ def make_markdown_caption(display_url: str, text: str):
 
 async def send_media(update, images, caption_md):
     try:
-        if len(images) == 1:
+        total = len(images)
+        if total == 0:
+            await update.message.reply_text(caption_md,
+                                            parse_mode="MarkdownV2")
+            return
+
+        if total == 1:
             await update.message.reply_photo(images[0],
                                              caption=caption_md,
                                              parse_mode="MarkdownV2")
-        elif len(images) > 1:
+            return
+
+        first_batch = images[:10]
+        remaining = images[10:]
+
+        first_group = [InputMediaPhoto(media=img) for img in first_batch]
+        await update.message.reply_media_group(first_group)
+
+        if remaining:
+            remain_group = []
+            for i, img in enumerate(remaining):
+                if i == 0:
+                    remain_group.append(
+                        InputMediaPhoto(media=img,
+                                        caption=caption_md,
+                                        parse_mode="MarkdownV2"))
+                else:
+                    remain_group.append(InputMediaPhoto(media=img))
+            await update.message.reply_media_group(remain_group)
+        else:
             group = []
-            for i, img in enumerate(images[:10]):
+            for i, img in enumerate(first_batch):
                 if i == 0:
                     group.append(
                         InputMediaPhoto(media=img,
@@ -78,10 +103,8 @@ async def send_media(update, images, caption_md):
                 else:
                     group.append(InputMediaPhoto(media=img))
             await update.message.reply_media_group(group)
-        else:
-            await update.message.reply_text(caption_md,
-                                            parse_mode="MarkdownV2")
-    except Exception:
+    except Exception as e:
+        print(f"send_media error: {e}")
         await update.message.reply_text(caption_md)
 
 
