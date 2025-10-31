@@ -169,7 +169,10 @@ async def handle_twitter(update: Update,
     stats["total_images"] += len(images)
     save_stats(stats)
 
-    caption_md = make_markdown_caption(url, tweet_text)
+    if force_original_file_only:
+        await send_files_as_documents(update, images, caption_md=None)
+    else:
+        caption_md = make_markdown_caption(url, tweet_text)
 
     try:
         await send_media(update, images, caption_md)
