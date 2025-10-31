@@ -58,15 +58,22 @@ def fetch_pixiv_data(url: str):
             r"(?:https?://)?(?:www\.)?pixiv\.net/(?:en/)?artworks/(\d+)(.*)",
             url)
         if not match:
-            return [], ""
+            return [], "", "normal"
         illust_id = match.group(1)
-        params = match.group(2).strip()
+        params_str = match.group(2).strip()
+        params = params_str.split()
 
         only_image = "-all" in params
         no_desc = "-des" in params
         no_tag = "-tag" in params
+        
+        parse_mode = "normal"
+        if "-o" in params:
+            parse_mode = "file_only"
+        elif "-O" in params:
+            parse_mode = "file_with_info"
 
-        page_match = re.search(r"\+([0-9,\-]+)(?=\s|$)", params)
+        page_match = re.search(r"\+([0-9,\-]+)(?=\s|$)", params_str)
         selection_raw = page_match.group(1) if page_match else ""
 
         api_url = f"https://www.pixiv.net/ajax/illust/{illust_id}"
@@ -77,11 +84,11 @@ def fetch_pixiv_data(url: str):
         }
         resp = requests.get(api_url, headers=headers, timeout=10)
         if resp.status_code != 200:
-            return [], ""
+            return [], "", "normal"
 
         data = resp.json()
         if data.get("error") or "body" not in data:
-            return [], ""
+            return [], "", "normal"
 
         body = data["body"]
         title = body.get("title", "")
@@ -94,13 +101,12 @@ def fetch_pixiv_data(url: str):
         total_pages = int(body.get("pageCount", 1))
         base_url = body.get("urls", {}).get("original", "")
         if not base_url:
-            return [], ""
+            return [], "", "normal"
 
         prefix = base_url.rsplit("_p0", 1)[0]
         ext = base_url.split(".")[-1]
         all_images = [f"{prefix}_p{i}.{ext}" for i in range(total_pages)]
 
-        # 页码选择
         selected_pages = parse_page_selection(selection_raw, total_pages)
         if selected_pages:
             images = [all_images[i - 1] for i in selected_pages]
@@ -108,12 +114,9 @@ def fetch_pixiv_data(url: str):
         else:
             images = all_images
             suffix = ""
-
-        # -all 仅图片模式
         if only_image:
-            return images, ""
+            return images, "", parse_mode
 
-        # 组装
         parts = [title + suffix]
         if not no_desc and desc:
             parts.append(desc)
@@ -121,8 +124,9 @@ def fetch_pixiv_data(url: str):
             parts.append(tag_str)
 
         text = "\n".join(p for p in parts if p).strip()
-        return images, text
+        
+        return images, text, parse_mode
 
     except Exception as e:
         print(f"Pixiv fetch error: {e}")
-        return [], ""
+        return [], "", "normal"
