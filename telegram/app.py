@@ -84,13 +84,10 @@ async def send_media(update, images, caption_md):
         media_group = []
         for i, img in enumerate(images):
             media_group.append(
-                InputMediaPhoto(
-                    media=img,
-                    caption=caption_md if i == 0 else None,
-                    parse_mode="MarkdownV2" if i == 0 else None
-                )
-            )
-        
+                InputMediaPhoto(media=img,
+                                caption=caption_md if i == 0 else None,
+                                parse_mode="MarkdownV2" if i == 0 else None))
+
         for i in range(0, total, 10):
             batch = media_group[i:i + 10]
             await update.message.reply_media_group(batch)
@@ -101,13 +98,27 @@ async def send_media(update, images, caption_md):
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (update.message.text or "").strip()
-    
-    is_channel_post = update.message.sender_chat is not None and update.message.sender_chat.type == 'channel'
+
+    msg = update.message
+    if not msg:
+        return
+
+    text = (msg.text or msg.caption or "").strip()
+
+    if not text:
+        return
+
+    is_channel_identity_post = msg.sender_chat is not None and msg.sender_chat.type == 'channel'
+
+    is_auto_forwarded_post = msg.is_automatic_forward is True
+
+    force_original_file_only = is_channel_identity_post or is_auto_forwarded_post
 
     tw_match = match_twitter_url(text)
     if tw_match:
-        await handle_twitter(update, tw_match.group(1), force_original_file_only=is_channel_post)
+        await handle_twitter(update,
+                             tw_match.group(1),
+                             force_original_file_only=force_original_file_only)
         return
 
     if match_pixiv_url(text):
@@ -134,11 +145,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             r"https?://(?:www\.)?pixiv\.net/(?:en/)?artworks/\d+", pixiv_link)
         display_url = clean_match.group(0) if clean_match else pixiv_link
 
-        await handle_pixiv(update, parse_input, display_url, force_original_file_only=is_channel_post)
+        await handle_pixiv(update,
+                           parse_input,
+                           display_url,
+                           force_original_file_only=force_original_file_only)
         return
 
 
-async def handle_twitter(update: Update, url: str, force_original_file_only: bool = False):
+async def handle_twitter(update: Update,
+                         url: str,
+                         force_original_file_only: bool = False):
     if "://x.com/" in url:
         url = url.replace("://x.com/", "://twitter.com/")
 
@@ -160,15 +176,14 @@ async def handle_twitter(update: Update, url: str, force_original_file_only: boo
         await send_media(update, images, caption_md)
 
 
-async def handle_pixiv(update: Update, parse_input: str, display_url: str, force_original_file_only: bool = False):
+async def handle_pixiv(update: Update,
+                       parse_input: str,
+                       display_url: str,
+                       force_original_file_only: bool = False):
     await update.message.chat.send_action("upload_photo")
 
     images, pixiv_text, parse_mode = fetch_pixiv_data(parse_input)
-    
-    if not images and not pixiv_text and parse_mode == "normal":
-        await update.message.reply_text("喵~ Pixiv 作品抓不到, 可能被删掉或不公开")
-        return
-    
+
     if not images:
         await update.message.reply_text("喵~ Pixiv 作品抓不到, 可能被删掉或不公开")
         return
@@ -179,12 +194,12 @@ async def handle_pixiv(update: Update, parse_input: str, display_url: str, force
 
     if force_original_file_only or parse_mode == "file_only":
         await send_files_as_documents(update, images, caption_md=None)
-    
+
     elif parse_mode == "file_with_info":
         caption_md = make_markdown_caption(display_url, pixiv_text)
         await send_files_as_documents(update, images, caption_md=caption_md)
-        
-    else: # parse_mode == "normal"
+
+    else:  # parse_mode == "normal"
         caption_md = make_markdown_caption(display_url, pixiv_text)
         await send_media(update, images, caption_md=caption_md)
 
@@ -205,7 +220,8 @@ def main():
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("stat", stat_command))
     app.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        MessageHandler((filters.TEXT | filters.CAPTION) & ~filters.COMMAND,
+                       handle_message))
 
     app.run_polling()
 
