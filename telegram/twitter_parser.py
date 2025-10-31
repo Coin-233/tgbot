@@ -1,4 +1,6 @@
 import re
+import os
+import tempfile
 import requests
 
 TWITTER_PATTERN = re.compile(
@@ -17,7 +19,6 @@ def fetch_tweet_data(url: str):
             return [], ""
         user, tweet_id = match.groups()
 
-        # FXtwitter
         api_url = f"https://api.fxtwitter.com/{user}/status/{tweet_id}"
         resp = requests.get(api_url, timeout=10)
         if resp.status_code != 200:
@@ -30,25 +31,34 @@ def fetch_tweet_data(url: str):
         tweet = data["tweet"]
         text = re.sub(r'\s+$', '', tweet.get("text", ""))
 
-        media_urls = []
+        media_files = []
         media = tweet.get("media", {})
-
         media_list = media.get("all", []) or media.get("photos", [])
 
         for m in media_list:
-            if "url" in m:
-                api_media_url = m["url"]
+            if "url" not in m:
+                continue
+            api_media_url = m["url"]
+            url_match = IMAGE_URL_PATTERN.search(api_media_url)
+            if url_match:
+                filename = url_match.group(1)
+                final_url = f"https://pbs.twimg.com/media/{filename}.png?name=4096x4096"
+            else:
+                final_url = api_media_url
 
-                url_match = IMAGE_URL_PATTERN.search(api_media_url)
+            # 下载到本地
+            r = requests.get(final_url, stream=True, timeout=15)
+            if not r.ok or not r.headers.get("Content-Type",
+                                             "").startswith("image/"):
+                continue
+            with tempfile.NamedTemporaryFile(delete=False,
+                                             suffix=".png") as tmp:
+                for chunk in r.iter_content(8192):
+                    tmp.write(chunk)
+                tmp_path = tmp.name
+            media_files.append(tmp_path)
 
-                if url_match:
-                    filename = url_match.group(1)
-                    final_url = f"https://pbs.twimg.com/media/{filename}.png?name=4096x4096"
-                    media_urls.append(final_url)
-                else:
-                    media_urls.append(api_media_url)
-
-        return media_urls, text
+        return media_files, text
     except Exception as e:
         print(f"Twitter parse error: {e}")
         return [], ""

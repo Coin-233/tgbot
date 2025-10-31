@@ -169,11 +169,14 @@ async def handle_twitter(update: Update,
     stats["total_images"] += len(images)
     save_stats(stats)
 
-    if force_original_file_only:
-        await send_files_as_documents(update, images, caption_md=None)
-    else:
-        caption_md = make_markdown_caption(url, tweet_text)
+    caption_md = make_markdown_caption(url, tweet_text)
+
+    try:
         await send_media(update, images, caption_md)
+    finally:
+        for f in images:
+            if os.path.exists(f):
+                os.remove(f)
 
 
 async def handle_pixiv(update: Update,
