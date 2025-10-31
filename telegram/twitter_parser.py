@@ -3,6 +3,7 @@ import requests
 
 TWITTER_PATTERN = re.compile(
     r'(https?://(?:www\.)?(?:twitter|x)\.com/\w+/status/\d+)')
+IMAGE_URL_PATTERN = re.compile(r'https?://pbs\.twimg\.com/media/([^.?]+)')
 
 
 def match_twitter_url(text: str):
@@ -31,15 +32,23 @@ def fetch_tweet_data(url: str):
 
         media_urls = []
         media = tweet.get("media", {})
-        if "photos" in media:
-            for p in media["photos"]:
-                if "url" in p:
-                    media_urls.append(p["url"])
-        elif "all" in media:
-            for m in media["all"]:
-                if m.get("type") == "photo" and "url" in m:
-                    media_urls.append(m["url"])
+
+        media_list = media.get("all", []) or media.get("photos", [])
+
+        for m in media_list:
+            if "url" in m:
+                api_media_url = m["url"]
+
+                url_match = IMAGE_URL_PATTERN.search(api_media_url)
+
+                if url_match:
+                    filename = url_match.group(1)
+                    final_url = f"https://pbs.twimg.com/media/{filename}.png?name=4096x4096"
+                    media_urls.append(final_url)
+                else:
+                    media_urls.append(api_media_url)
 
         return media_urls, text
-    except Exception:
+    except Exception as e:
+        print(f"Twitter parse error: {e}")
         return [], ""
