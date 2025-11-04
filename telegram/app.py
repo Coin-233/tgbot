@@ -231,8 +231,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def stat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (f"统计信息：\n"
-           f"• 总解析链接：{stats['total_links']} 条\n"
-           f"• 总解析文件: {stats['total_images']} 个")
+           f"• 总解析链接:  {stats['total_links']} 条\n"
+           f"• 总解析文件:  {stats['total_images']} 个")
     await update.message.reply_text(msg)
 
 
