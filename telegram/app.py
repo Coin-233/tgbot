@@ -1,7 +1,7 @@
 import os
 import re
 from dotenv import load_dotenv
-from telegram import Update, InputMediaPhoto
+from telegram import Update, InputMediaPhoto, InputPaidMediaVideo
 from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, ContextTypes, filters
 
 from twitter_parser import match_twitter_url, fetch_tweet_data
@@ -76,18 +76,32 @@ async def send_media(update, images, caption_md):
             return
 
         if total == 1:
-            await update.message.reply_photo(images[0],
-                                             caption=caption_md,
-                                             parse_mode="MarkdownV2")
+            file_path = images[0]
+            if file_path.endswith(".mp4"):
+                await update.message.reply_video(file_path,
+                                                 caption=caption_md,
+                                                 parse_mode="MarkdownV2")
+            else:
+                await update.message.reply_photo(file_path,
+                                                 caption=caption_md,
+                                                 parse_mode="MarkdownV2")
             return
 
         media_group = []
-        for i, img in enumerate(images):
-            media_group.append(
-                InputMediaPhoto(media=img,
-                                caption=caption_md if i == 0 else None,
-                                parse_mode="MarkdownV2" if i == 0 else None))
+        for i, file_path in enumerate(images):
+            caption = caption_md if i == 0 else None
+            parse_mode = "MarkdownV2" if i == 0 else None
 
+            if file_path.endswith(".mp4"):
+                media_group.append(
+                    InputMediaVideo(media=file_path,
+                                    caption=caption,
+                                    parse_mode=parse_mode))
+            else:
+                media_group.append(
+                    InputMediaPhoto(media=file_path,
+                                    caption=caption,
+                                    parse_mode=parse_mode))
         for i in range(0, total, 10):
             batch = media_group[i:i + 10]
             await update.message.reply_media_group(batch)
@@ -158,7 +172,7 @@ async def handle_twitter(update: Update,
     if "://x.com/" in url:
         url = url.replace("://x.com/", "://twitter.com/")
 
-    await update.message.chat.send_action("upload_photo")
+    await update.message.chat.send_action("upload_document")
     images, tweet_text = fetch_tweet_data(url)
 
     if not images and not tweet_text:
@@ -218,7 +232,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def stat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (f"统计信息：\n"
            f"• 总解析链接：{stats['total_links']} 条\n"
-           f"• 总解析图片：{stats['total_images']} 张")
+           f"• 总解析文件: {stats['total_images']} 个")
     await update.message.reply_text(msg)
 
 
