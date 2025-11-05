@@ -6,15 +6,15 @@
 
 ## 功能
 
-pixiv抓取拥有以下参数
+pixiv 抓取拥有以下参数
 
 - `+${pages}` 获取指定图片
 
-*支持`+1`, `+1,2,5`, `+1-3`*
+_支持`+1`, `+1,2,5`, `+1-3`_
 
-- `-all` 去除简介与tag
+- `-all` 去除简介与 tag
 - `-des` 去除简介
-- `-tag` 去除tag
+- `-tag` 去除 tag
 - `-o` 仅发送原图文件
 - `-O` 发送原图文件
 
@@ -47,7 +47,7 @@ https://www.pixiv.net/artworks/134204905 -des
 
 ![](/images/3-telegram-pixiv-pages-example.png)
 
-## 去除tag
+## 去除 tag
 
 ```text
 https://www.pixiv.net/artworks/136673706 -tag
@@ -63,8 +63,16 @@ https://www.pixiv.net/artworks/134040248 +3 -des
 
 ![](/images/5-telegram-pixiv-pages-example.png)
 
+## 仅获取原图
+
+```text
+https://www.pixiv.net/artworks/84795129 -o
+```
+
+![](/images/6-telegram-pixiv-pages-example.png)
+
 </details>
 
 ## 搭建
 
-请在`.env`中配置TOKEN, 与代理(如需, 支持`socks5`, `http`, `https`)
+请在`.env`中配置 TOKEN, 与代理(如需, 支持`socks5`, `http`, `https`)
