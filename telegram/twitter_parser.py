@@ -12,7 +12,7 @@ def match_twitter_url(text: str):
     return TWITTER_PATTERN.search(text)
 
 
-def fetch_tweet_data(url: str):
+def fetch_tweet_data(url: str, force_original_file_only: bool = False):
     try:
         match = re.search(r"(?:twitter|x)\.com/([^/]+)/status/(\d+)", url)
         if not match:
@@ -32,58 +32,80 @@ def fetch_tweet_data(url: str):
         text = re.sub(r'\s+$', '', tweet.get("text", ""))
 
         media_files = []
-        media = tweet.get("media", {})
-        media_list = media.get("all", [])
+        media_list = tweet.get("media", {}).get("all", [])
 
         for m in media_list:
-            if "url" not in m:
-                continue
-
-            api_media_url = m["url"]
+            api_media_url = m.get("url")
             media_type = m.get("type")
-
-            final_url = ""
-            suffix = ""
+            if not api_media_url or not media_type:
+                continue
 
             if media_type == "photo":
                 url_match = IMAGE_URL_PATTERN.search(api_media_url)
                 if url_match:
                     filename = url_match.group(1)
-                    final_url = f"https://pbs.twimg.com/media/{filename}.png?name=4096x4096"
+                    png_url = f"https://pbs.twimg.com/media/{filename}.png?name=4096x4096"
+                    jpg_url = f"https://pbs.twimg.com/media/{filename}.jpg?name=large"
                 else:
-                    final_url = api_media_url
-                suffix = ".png"
+                    alt_match = re.search(r'/media/([^.?]+)', api_media_url)
+                    if alt_match:
+                        filename = alt_match.group(1)
+                        png_url = f"https://pbs.twimg.com/media/{filename}.png?name=4096x4096"
+                        jpg_url = f"https://pbs.twimg.com/media/{filename}.jpg?name=large"
+                    else:
+                        png_url = api_media_url
+                        jpg_url = api_media_url
 
-            elif media_type == "video" or media_type == "gif":
-                final_url = api_media_url
-                suffix = ".mp4"
+                # 先尝试 PNG
+                try:
+                    r = requests.get(png_url, stream=True, timeout=15)
+                    if r.ok and r.headers.get("Content-Type",
+                                              "").startswith("image/"):
+                        with tempfile.NamedTemporaryFile(delete=False,
+                                                         suffix=".png") as tmp:
+                            for chunk in r.iter_content(8192):
+                                tmp.write(chunk)
+                            tmp_path = tmp.name
 
-            else:
+                        # 仅普通模式下检测大小
+                        if (not force_original_file_only
+                            ) and os.path.getsize(tmp_path) > 10 * 1024 * 1024:
+                            os.remove(tmp_path)
+                            raise Exception
+                        media_files.append(tmp_path)
+                        continue
+                except Exception:
+                    pass
+
+                try:
+                    r = requests.get(jpg_url, stream=True, timeout=15)
+                    if r.ok and r.headers.get("Content-Type",
+                                              "").startswith("image/"):
+                        with tempfile.NamedTemporaryFile(delete=False,
+                                                         suffix=".jpg") as tmp:
+                            for chunk in r.iter_content(8192):
+                                tmp.write(chunk)
+                            tmp_path = tmp.name
+                        media_files.append(tmp_path)
+                except Exception:
+                    pass
                 continue
 
-            try:
-                r = requests.get(final_url, stream=True, timeout=15)
-
-                content_type = r.headers.get("Content-Type", "")
-                if not r.ok or (not content_type.startswith("image/")
-                                and not content_type.startswith("video/")):
-                    print(
-                        f"Skipping download, bad status or content type: {r.status_code} / {content_type}"
-                    )
-                    continue
-
-                with tempfile.NamedTemporaryFile(delete=False,
-                                                 suffix=suffix) as tmp:
-                    for chunk in r.iter_content(8192):
-                        tmp.write(chunk)
-                    tmp_path = tmp.name
-                media_files.append(tmp_path)
-            except Exception as download_e:
-                print(f"Failed to download media {final_url}: {download_e}")
-                continue
+            if media_type in ["video", "gif"]:
+                try:
+                    r = requests.get(api_media_url, stream=True, timeout=15)
+                    if r.ok and r.headers.get("Content-Type",
+                                              "").startswith("video/"):
+                        with tempfile.NamedTemporaryFile(delete=False,
+                                                         suffix=".mp4") as tmp:
+                            for chunk in r.iter_content(8192):
+                                tmp.write(chunk)
+                            tmp_path = tmp.name
+                        media_files.append(tmp_path)
+                except Exception:
+                    pass
 
         return media_files, text
 
-    except Exception as e:
-        print(f"Twitter parse error: {e}")
+    except Exception:
         return [], ""

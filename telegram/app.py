@@ -66,7 +66,7 @@ def make_markdown_caption(display_url: str, text: str):
     return f"{link_md}\n\n{body_md_lines}"
 
 
-async def send_media(update, images, caption_md):
+async def send_media(update, images, caption_md, skip_size_check=False):
     try:
         total = len(images)
         if total == 0:
@@ -75,12 +75,21 @@ async def send_media(update, images, caption_md):
                                                 parse_mode="MarkdownV2")
             return
 
+        MAX_PHOTO_SIZE = 10 * 1024 * 1024  # 10MB 图片限制
+
         if total == 1:
             file_path = images[0]
+            file_size = os.path.getsize(file_path)
+
             if file_path.endswith(".mp4"):
                 await update.message.reply_video(file_path,
                                                  caption=caption_md,
                                                  parse_mode="MarkdownV2")
+
+            elif not skip_size_check and file_size > MAX_PHOTO_SIZE:
+                await update.message.reply_document(file_path,
+                                                    caption=caption_md,
+                                                    parse_mode="MarkdownV2")
             else:
                 await update.message.reply_photo(file_path,
                                                  caption=caption_md,
@@ -102,6 +111,7 @@ async def send_media(update, images, caption_md):
                     InputMediaPhoto(media=file_path,
                                     caption=caption,
                                     parse_mode=parse_mode))
+
         for i in range(0, total, 10):
             batch = media_group[i:i + 10]
             await update.message.reply_media_group(batch)
@@ -130,8 +140,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     tw_match = match_twitter_url(text)
     if tw_match:
+        parts = text.split()
+        twitter_link = ""
+        arg_tokens = []
+
+        for i, token in enumerate(parts):
+            if "twitter.com/" in token or "x.com/" in token:
+                twitter_link = token.strip()
+                j = i + 1
+                while j < len(parts) and parts[j].startswith("-"):
+                    arg_tokens.append(parts[j].strip())
+                    j += 1
+                break
+
+        if not twitter_link:
+            return
+
+        parse_input = f"{twitter_link} {' '.join(arg_tokens)}".strip()
+
         await handle_twitter(update,
-                             tw_match.group(1),
+                             parse_input,
                              force_original_file_only=force_original_file_only)
         return
 
@@ -167,13 +195,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_twitter(update: Update,
-                         url: str,
+                         parse_input: str,
                          force_original_file_only: bool = False):
-    if "://x.com/" in url:
-        url = url.replace("://x.com/", "://twitter.com/")
+    if "://x.com/" in parse_input:
+        parse_input = parse_input.replace("://x.com/", "://twitter.com/")
+
+    parts = parse_input.split()
+    url = parts[0]
+    params = parts[1:] if len(parts) > 1 else []
+
+    parse_mode = "normal"
+    if "-o" in params:
+        parse_mode = "file_only"
+    elif "-O" in params:
+        parse_mode = "file_with_info"
 
     await update.message.chat.send_action("upload_document")
-    images, tweet_text = fetch_tweet_data(url)
+    fetch_force_original = force_original_file_only or parse_mode in [
+        "file_only", "file_with_info"
+    ]
+    images, tweet_text = fetch_tweet_data(
+        url, force_original_file_only=fetch_force_original)
 
     if not images and not tweet_text:
         await update.message.reply_text("喵~ 这个推文抓不到, 可能被删掉或不公开")
@@ -183,18 +225,23 @@ async def handle_twitter(update: Update,
     stats["total_images"] += len(images)
     save_stats(stats)
 
-    if force_original_file_only:
+    if force_original_file_only or parse_mode == "file_only":
         await send_files_as_documents(update, images, caption_md=None)
-        return
+
+    elif parse_mode == "file_with_info":
+        caption_md = make_markdown_caption(url, tweet_text)
+        await send_files_as_documents(update, images, caption_md=caption_md)
+
     else:
         caption_md = make_markdown_caption(url, tweet_text)
+        await send_media(update,
+                         images,
+                         caption_md=caption_md,
+                         skip_size_check=force_original_file_only)
 
-    try:
-        await send_media(update, images, caption_md)
-    finally:
-        for f in images:
-            if os.path.exists(f):
-                os.remove(f)
+    for f in images:
+        if os.path.exists(f):
+            os.remove(f)
 
 
 async def handle_pixiv(update: Update,
@@ -222,7 +269,10 @@ async def handle_pixiv(update: Update,
 
     else:  # parse_mode == "normal"
         caption_md = make_markdown_caption(display_url, pixiv_text)
-        await send_media(update, images, caption_md=caption_md)
+        await send_media(update,
+                         images,
+                         caption_md=caption_md,
+                         skip_size_check=force_original_file_only)
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
