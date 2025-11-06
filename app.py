@@ -6,6 +6,7 @@ from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, Con
 
 from twitter_parser import match_twitter_url, fetch_tweet_data
 from pixiv_parser import match_pixiv_url, fetch_pixiv_data
+from bili_parser import match_bilibili_url, fetch_bilibili_data
 from stats_manager import load_stats, save_stats
 from file_sender import send_files_as_documents
 
@@ -17,7 +18,7 @@ if proxy:
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 stats = load_stats()
 START_MESSAGE_MD = r"""
-发送 *Twitter* 或 *Pixiv* 链接，机器人将自动解析并转发图片\.
+发送 *Twitter*, *Pixiv* 或 *Bilibili动态* 链接，机器人将自动解析并发送图片\.
 
 Pixiv 解析指令
 
@@ -79,17 +80,24 @@ async def send_media(update, images, caption_md, skip_size_check=False):
 
         if total == 1:
             file_path = images[0]
-            file_size = os.path.getsize(file_path)
+
+            is_url = file_path.startswith("http://") or file_path.startswith(
+                "https://")
 
             if file_path.endswith(".mp4"):
                 await update.message.reply_video(file_path,
                                                  caption=caption_md,
                                                  parse_mode="MarkdownV2")
 
-            elif not skip_size_check and file_size > MAX_PHOTO_SIZE:
-                await update.message.reply_document(file_path,
-                                                    caption=caption_md,
-                                                    parse_mode="MarkdownV2")
+            elif not is_url:
+                file_size = os.path.getsize(file_path)
+                if not skip_size_check and file_size > MAX_PHOTO_SIZE:
+                    await update.message.reply_document(
+                        file_path, caption=caption_md, parse_mode="MarkdownV2")
+                else:
+                    await update.message.reply_photo(file_path,
+                                                     caption=caption_md,
+                                                     parse_mode="MarkdownV2")
             else:
                 await update.message.reply_photo(file_path,
                                                  caption=caption_md,
@@ -193,6 +201,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                            force_original_file_only=force_original_file_only)
         return
 
+    if match_bilibili_url(text):
+        parts = text.split()
+        bili_link = ""
+        arg_tokens = []
+
+        for i, token in enumerate(parts):
+            if "t.bilibili.com/" in token:
+                bili_link = token.strip()
+                j = i + 1
+                while j < len(parts) and parts[j].startswith("-"):
+                    arg_tokens.append(parts[j].strip())
+                    j += 1
+                break
+
+        if not bili_link:
+            return
+
+        parse_input = f"{bili_link} {' '.join(arg_tokens)}".strip()
+
+        clean_match = re.search(r"https?://t\.bilibili\.com/\d+", bili_link)
+        display_url = clean_match.group(0) if clean_match else bili_link
+
+        await handle_bilibili(
+            update,
+            parse_input,
+            display_url,
+            force_original_file_only=force_original_file_only)
+        return
+
 
 async def handle_twitter(update: Update,
                          parse_input: str,
@@ -269,6 +306,37 @@ async def handle_pixiv(update: Update,
 
     else:  # parse_mode == "normal"
         caption_md = make_markdown_caption(display_url, pixiv_text)
+        await send_media(update,
+                         images,
+                         caption_md=caption_md,
+                         skip_size_check=force_original_file_only)
+
+
+async def handle_bilibili(update: Update,
+                          parse_input: str,
+                          display_url: str,
+                          force_original_file_only: bool = False):
+    await update.message.chat.send_action("upload_photo")
+
+    images, bili_text, parse_mode = fetch_bilibili_data(parse_input)
+
+    if not images and not bili_text:
+        await update.message.reply_text("喵~ 这个动态抓不到, 可能被删掉或设为仅自己可见")
+        return
+
+    stats["total_links"] += 1
+    stats["total_images"] += len(images)
+    save_stats(stats)
+
+    if force_original_file_only or parse_mode == "file_only":
+        await send_files_as_documents(update, images, caption_md=None)
+
+    elif parse_mode == "file_with_info":
+        caption_md = make_markdown_caption(display_url, bili_text)
+        await send_files_as_documents(update, images, caption_md=caption_md)
+
+    else:
+        caption_md = make_markdown_caption(display_url, bili_text)
         await send_media(update,
                          images,
                          caption_md=caption_md,

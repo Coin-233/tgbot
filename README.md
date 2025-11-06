@@ -1,4 +1,4 @@
-# 从`twitter`和`pixiv`抓取图片
+# 从`twitter`,`pixiv`,`bilibili`抓取图片
 
 ## demo
 
