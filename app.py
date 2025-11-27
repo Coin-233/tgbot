@@ -355,6 +355,7 @@ async def stat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
+    print("Started.")
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("stat", stat_command))
