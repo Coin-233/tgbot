@@ -76,3 +76,5 @@ https://www.pixiv.net/artworks/84795129 -o
 ## 搭建
 
 请在`.env`中配置 TOKEN, 与代理(如需, 支持`socks5`, `http`, `https`)
+
+`PHPSESSID`为pixiv鉴权使用, 获取 R18 图需要
