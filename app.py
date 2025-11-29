@@ -1,6 +1,8 @@
 import os
 import re
 from dotenv import load_dotenv
+load_dotenv()
+
 from telegram import Update, InputMediaPhoto, InputPaidMediaVideo
 from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, ContextTypes, filters
 
@@ -10,7 +12,6 @@ from bili_parser import match_bilibili_url, fetch_bilibili_data
 from stats_manager import load_stats, save_stats
 from file_sender import send_files_as_documents
 
-load_dotenv()
 proxy = os.getenv("PROXY", "").strip()
 if proxy:
     os.environ["HTTP_PROXY"] = proxy

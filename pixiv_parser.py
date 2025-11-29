@@ -1,6 +1,10 @@
 import re
+import os
 import requests
 import html
+import tempfile
+
+PIXIV_SESSID = os.getenv("PHPSESSID", "").strip()
 
 
 def match_pixiv_url(text: str):
@@ -66,7 +70,7 @@ def fetch_pixiv_data(url: str):
         only_image = "-all" in params
         no_desc = "-des" in params
         no_tag = "-tag" in params
-        
+
         parse_mode = "normal"
         if "-o" in params:
             parse_mode = "file_only"
@@ -77,12 +81,21 @@ def fetch_pixiv_data(url: str):
         selection_raw = page_match.group(1) if page_match else ""
 
         api_url = f"https://www.pixiv.net/ajax/illust/{illust_id}"
+        artwork_url = f"https://www.pixiv.net/artworks/{illust_id}"
+
         headers = {
             "User-Agent":
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
-            "Referer": f"https://www.pixiv.net/artworks/{illust_id}"
+            "Referer": artwork_url
         }
-        resp = requests.get(api_url, headers=headers, timeout=10)
+        cookies = {}
+        if PIXIV_SESSID:
+            cookies["PHPSESSID"] = PIXIV_SESSID
+
+        resp = requests.get(api_url,
+                            headers=headers,
+                            cookies=cookies,
+                            timeout=10)
         if resp.status_code != 200:
             return [], "", "normal"
 
@@ -105,17 +118,48 @@ def fetch_pixiv_data(url: str):
 
         prefix = base_url.rsplit("_p0", 1)[0]
         ext = base_url.split(".")[-1]
-        all_images = [f"{prefix}_p{i}.{ext}" for i in range(total_pages)]
+        all_image_urls = [f"{prefix}_p{i}.{ext}" for i in range(total_pages)]
 
         selected_pages = parse_page_selection(selection_raw, total_pages)
         if selected_pages:
-            images = [all_images[i - 1] for i in selected_pages]
+            target_urls = [all_image_urls[i - 1] for i in selected_pages]
             suffix = f" {','.join(map(str, selected_pages))}/{total_pages}" if total_pages > 1 else ""
         else:
-            images = all_images
+            target_urls = all_image_urls
             suffix = ""
+
+        local_media_files = []
+
+        for img_url in target_urls:
+            try:
+                r = requests.get(img_url,
+                                 headers=headers,
+                                 stream=True,
+                                 timeout=20)
+
+                if r.ok and r.headers.get("Content-Type",
+                                          "").startswith("image/"):
+                    file_ext = f".{ext}"
+
+                    with tempfile.NamedTemporaryFile(delete=False,
+                                                     suffix=file_ext) as tmp:
+                        for chunk in r.iter_content(8192):
+                            tmp.write(chunk)
+                        local_media_files.append(tmp.name)
+                else:
+                    print(
+                        f"Pixiv download failed (Status: {r.status_code}, Type: {r.headers.get('Content-Type')}) for {img_url}"
+                    )
+
+            except Exception as e:
+                print(f"Error downloading pixiv image {img_url}: {e}")
+                pass
+
+        if not local_media_files:
+            return [], "", "normal"
+
         if only_image:
-            return images, "", parse_mode
+            return local_media_files, "", parse_mode
 
         parts = [title + suffix]
         if not no_desc and desc:
@@ -124,8 +168,8 @@ def fetch_pixiv_data(url: str):
             parts.append(tag_str)
 
         text = "\n".join(p for p in parts if p).strip()
-        
-        return images, text, parse_mode
+
+        return local_media_files, text, parse_mode
 
     except Exception as e:
         print(f"Pixiv fetch error: {e}")
