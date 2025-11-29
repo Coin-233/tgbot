@@ -9,7 +9,7 @@ from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, Con
 
 from twitter_parser import match_twitter_url, fetch_tweet_data
 from pixiv_parser import match_pixiv_url, fetch_pixiv_data, download_pixiv_images
-from bili_parser import match_bilibili_url, fetch_bilibili_data
+from bili_parser import match_bilibili_url, fetch_bilibili_data, download_bili_images
 from stats_manager import load_stats, save_stats
 from file_sender import send_files_as_documents
 
@@ -143,20 +143,32 @@ async def send_media(update, images, caption_md, skip_size_check=False):
         error_msg = str(e)
         print(f"send_media error: {error_msg}")
 
-        should_retry = "Wrong type of the web page content" in error_msg
+        should_retry = ("Wrong type of the web page content" in error_msg
+                        or "Failed to get http" in error_msg
+                        or "webpage_media_empty" in error_msg)
 
-        is_pixiv_link = images and isinstance(
-            images[0], str) and ("pixiv" in images[0] or "pximg" in images[0])
+        is_pixiv = False
+        is_bili = False
 
-        if should_retry and is_pixiv_link:
+        if images and isinstance(images[0], str):
+            if "pixiv" in images[0] or "pximg" in images[0]:
+                is_pixiv = True
+            elif "hdslb.com" in images[0] or "bilibili" in images[0]:
+                is_bili = True
+
+        if should_retry and (is_pixiv or is_bili):
             print(
                 "Detected anti-hotlink error, switching to local download mode..."
             )
             try:
-
                 await update.message.chat.send_action("upload_photo")
 
-                local_files = download_pixiv_images(images)
+                local_files = []
+
+                if is_pixiv:
+                    local_files = download_pixiv_images(images)
+                elif is_bili:
+                    local_files = download_bili_images(images)
 
                 if local_files:
 

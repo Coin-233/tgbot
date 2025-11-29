@@ -1,4 +1,5 @@
 import re
+import tempfile
 import requests
 import html
 
@@ -29,6 +30,42 @@ def html_to_markdown_v2(raw_html: str) -> str:
     return text
 
 
+def download_bili_images(url_list):
+    local_files = []
+    headers = {
+        "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+        "Referer": "https://t.bilibili.com/"
+    }
+
+    for img_url in url_list:
+        try:
+            # 强https
+            if img_url.startswith("http://"):
+                img_url = img_url.replace("http://", "https://")
+
+            r = requests.get(img_url, headers=headers, stream=True, timeout=20)
+
+            if r.ok:
+                ext = ".jpg"
+                if ".png" in img_url: ext = ".png"
+                elif ".gif" in img_url: ext = ".gif"
+
+                with tempfile.NamedTemporaryFile(delete=False,
+                                                 suffix=ext) as tmp:
+                    for chunk in r.iter_content(8192):
+                        tmp.write(chunk)
+                    local_files.append(tmp.name)
+            else:
+                print(
+                    f"Bilibili download failed: {r.status_code} for {img_url}")
+
+        except Exception as e:
+            print(f"Bilibili download error: {e}")
+
+    return local_files
+
+
 def fetch_bilibili_data(url: str):
     try:
         match = re.search(r"(?:https?://)?t\.bilibili\.com/(\d+)(.*)", url)
@@ -48,11 +85,9 @@ def fetch_bilibili_data(url: str):
         api_url = f"https://api.bilibili.com/x/polymer/web-dynamic/v1/detail?id={dynamic_id}&features=itemOpusStyle"
 
         headers = {
-            "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                           "AppleWebKit/537.36 (KHTML, like Gecko) "
-                           "Chrome/141.0.0.0 Safari/537.36"),
-            "Referer":
-            f"https://t.bilibili.com/{dynamic_id}",
+            "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+            "Referer": f"https://t.bilibili.com/{dynamic_id}",
         }
 
         resp = requests.get(api_url, headers=headers, timeout=10)
@@ -67,11 +102,10 @@ def fetch_bilibili_data(url: str):
         modules = item.get("modules", {})
         author = modules.get("module_author", {})
         dynamic = modules.get("module_dynamic", {})
-        stats = modules.get("module_stat", {})
 
         author_name = author.get("name", "")
         pub_time = author.get("pub_time", "")
-        author_line = f"{author_name} 发布于 {pub_time}" if author_name else ""
+        author_line = f"*{author_name}* 发布于 {pub_time}" if author_name else ""
 
         images = []
         text_content = ""
@@ -86,13 +120,19 @@ def fetch_bilibili_data(url: str):
             text_content = html_to_markdown_v2(text_content)
             for pic in opus.get("pics", []):
                 if "url" in pic:
-                    images.append(pic["url"])
+                    img_url = pic["url"]
+                    if img_url.startswith("http://"):
+                        img_url = img_url.replace("http://", "https://")
+                    images.append(img_url)
 
         elif major_type == "MAJOR_TYPE_DRAW":
             draw = major.get("draw", {})
             for img in draw.get("items", []):
                 if "src" in img:
-                    images.append(img["src"])
+                    img_url = img["src"]
+                    if img_url.startswith("http://"):
+                        img_url = img_url.replace("http://", "https://")
+                    images.append(img_url)
             desc = dynamic.get("desc", "")
             if desc:
                 text_content = html_to_markdown_v2(desc)
@@ -110,4 +150,5 @@ def fetch_bilibili_data(url: str):
         return images, text, parse_mode
 
     except Exception as e:
+        print(f"Bili fetch error: {e}")
         return [], "", "normal"
