@@ -1,13 +1,14 @@
 import os
 import re
 from dotenv import load_dotenv
+
 load_dotenv()
 
 from telegram import Update, InputMediaPhoto, InputPaidMediaVideo
 from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, ContextTypes, filters
 
 from twitter_parser import match_twitter_url, fetch_tweet_data
-from pixiv_parser import match_pixiv_url, fetch_pixiv_data
+from pixiv_parser import match_pixiv_url, fetch_pixiv_data, download_pixiv_images
 from bili_parser import match_bilibili_url, fetch_bilibili_data
 from stats_manager import load_stats, save_stats
 from file_sender import send_files_as_documents
@@ -69,6 +70,8 @@ def make_markdown_caption(display_url: str, text: str):
 
 
 async def send_media(update, images, caption_md, skip_size_check=False):
+    files_to_close = []
+
     try:
         total = len(images)
         if total == 0:
@@ -79,55 +82,108 @@ async def send_media(update, images, caption_md, skip_size_check=False):
 
         MAX_PHOTO_SIZE = 10 * 1024 * 1024  # 10MB 图片限制
 
+        media_group = []
+
+        def get_media_input(path):
+            if path.startswith("http://") or path.startswith("https://"):
+                return path
+            else:
+                f = open(path, 'rb')
+                files_to_close.append(f)
+                return f
+
         if total == 1:
             file_path = images[0]
+            media_input = get_media_input(file_path)
 
-            is_url = file_path.startswith("http://") or file_path.startswith(
-                "https://")
+            is_url = isinstance(media_input, str)
 
             if file_path.endswith(".mp4"):
-                await update.message.reply_video(file_path,
+                await update.message.reply_video(media_input,
                                                  caption=caption_md,
                                                  parse_mode="MarkdownV2")
-
             elif not is_url:
                 file_size = os.path.getsize(file_path)
                 if not skip_size_check and file_size > MAX_PHOTO_SIZE:
                     await update.message.reply_document(
-                        file_path, caption=caption_md, parse_mode="MarkdownV2")
+                        media_input,
+                        caption=caption_md,
+                        parse_mode="MarkdownV2")
                 else:
-                    await update.message.reply_photo(file_path,
+                    await update.message.reply_photo(media_input,
                                                      caption=caption_md,
                                                      parse_mode="MarkdownV2")
             else:
-                await update.message.reply_photo(file_path,
+                await update.message.reply_photo(media_input,
                                                  caption=caption_md,
                                                  parse_mode="MarkdownV2")
-            return
 
-        media_group = []
-        for i, file_path in enumerate(images):
-            caption = caption_md if i == 0 else None
-            parse_mode = "MarkdownV2" if i == 0 else None
+        else:
+            for i, file_path in enumerate(images):
+                caption = caption_md if i == 0 else None
+                parse_mode = "MarkdownV2" if i == 0 else None
+                media_input = get_media_input(file_path)
 
-            if file_path.endswith(".mp4"):
-                media_group.append(
-                    InputMediaVideo(media=file_path,
-                                    caption=caption,
-                                    parse_mode=parse_mode))
-            else:
-                media_group.append(
-                    InputMediaPhoto(media=file_path,
-                                    caption=caption,
-                                    parse_mode=parse_mode))
+                if file_path.endswith(".mp4"):
+                    media_group.append(
+                        InputMediaVideo(media=media_input,
+                                        caption=caption,
+                                        parse_mode=parse_mode))
+                else:
+                    media_group.append(
+                        InputMediaPhoto(media=media_input,
+                                        caption=caption,
+                                        parse_mode=parse_mode))
 
-        for i in range(0, total, 10):
-            batch = media_group[i:i + 10]
-            await update.message.reply_media_group(batch)
+            for i in range(0, total, 10):
+                batch = media_group[i:i + 10]
+                await update.message.reply_media_group(batch)
 
     except Exception as e:
-        print(f"send_media error: {e}")
-        await update.message.reply_text(caption_md, parse_mode="MarkdownV2")
+        error_msg = str(e)
+        print(f"send_media error: {error_msg}")
+
+        should_retry = "Wrong type of the web page content" in error_msg
+
+        is_pixiv_link = images and isinstance(
+            images[0], str) and ("pixiv" in images[0] or "pximg" in images[0])
+
+        if should_retry and is_pixiv_link:
+            print(
+                "Detected anti-hotlink error, switching to local download mode..."
+            )
+            try:
+
+                await update.message.chat.send_action("upload_photo")
+
+                local_files = download_pixiv_images(images)
+
+                if local_files:
+
+                    await send_media(update,
+                                     local_files,
+                                     caption_md,
+                                     skip_size_check=True)
+
+                    for f in local_files:
+                        try:
+                            os.remove(f)
+                        except:
+                            pass
+                    return
+            except Exception as retry_e:
+                print(f"Retry failed: {retry_e}")
+
+        if caption_md:
+            await update.message.reply_text(caption_md,
+                                            parse_mode="MarkdownV2")
+
+    finally:
+        for f in files_to_close:
+            try:
+                f.close()
+            except:
+                pass
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
