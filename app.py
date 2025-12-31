@@ -150,7 +150,8 @@ async def send_media(update, images, caption_md, skip_size_check=False):
 
         should_retry = ("Wrong type of the web page content" in error_msg
                         or "Failed to get http" in error_msg
-                        or "webpage_media_empty" in error_msg)
+                        or "webpage_media_empty" in error_msg
+                        or "webpage_curl_failed" in error_msg)
 
         is_pixiv = False
         is_bili = False
