@@ -16,8 +16,7 @@ def escape_md_v2(text: str) -> str:
     return text
 
 def match_pixiv_url(text: str):
-    return re.search(
-        r"(?:https?://)?(?:www\.)?pixiv\.net/(?:en/)?artworks/\d+", text)
+    return re.search(r"pixiv\.net/.*(?:artworks/|illust_id=)(\d+)", text)
 
 
 def html_to_markdown_v2(raw_html: str) -> str:
@@ -133,9 +132,7 @@ def download_pixiv_images(url_list):
 
 def fetch_pixiv_data(url: str):
     try:
-        match = re.search(
-            r"(?:https?://)?(?:www\.)?pixiv\.net/(?:en/)?artworks/(\d+)(.*)",
-            url)
+        match = re.search(r"(?:artworks/|illust_id=)(\d+)(.*)", url)
         if not match: return [], "", "normal"
 
         illust_id = match.group(1)

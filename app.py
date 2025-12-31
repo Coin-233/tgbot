@@ -265,7 +265,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         arg_tokens = []
 
         for i, token in enumerate(parts):
-            if "pixiv.net/artworks/" in token:
+            if "pixiv.net" in token and ("artworks/" in token or "illust_id" in token):
                 pixiv_link = token.strip()
                 j = i + 1
                 while j < len(parts) and (parts[j].startswith("+")
@@ -279,9 +279,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         parse_input = f"{pixiv_link} {' '.join(arg_tokens)}".strip()
 
-        clean_match = re.search(
-            r"https?://(?:www\.)?pixiv\.net/(?:en/)?artworks/\d+", pixiv_link)
-        display_url = clean_match.group(0) if clean_match else pixiv_link
+        id_match = re.search(r"(?:artworks/|illust_id=)(\d+)", pixiv_link)
+        if id_match:
+            display_url = f"https://www.pixiv.net/artworks/{id_match.group(1)}"
+        else:
+            display_url = pixiv_link
 
         await handle_pixiv(update,
                            parse_input,
