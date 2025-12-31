@@ -171,11 +171,24 @@ async def send_media(update, images, caption_md, skip_size_check=False):
                     local_files = download_bili_images(images)
 
                 if local_files:
+                    # 检查是否有文件超过 10MB
+                    has_large_file = False
+                    for f_path in local_files:
+                        if os.path.exists(f_path) and os.path.getsize(f_path) > 10 * 1024 * 1024:
+                            has_large_file = True
+                            break
+                    
+                    # 如果有大文件, 直接强制用文档形式发送
+                    if has_large_file:
+                        await send_files_as_documents(update, 
+                                                    local_files, 
+                                                    caption_md=caption_md)
+                    else:
 
-                    await send_media(update,
-                                     local_files,
-                                     caption_md,
-                                     skip_size_check=True)
+                        await send_media(update,
+                                         local_files,
+                                         caption_md,
+                                         skip_size_check=False)
 
                     for f in local_files:
                         try:
