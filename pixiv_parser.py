@@ -3,9 +3,17 @@ import os
 import requests
 import html
 import tempfile
+import urllib.parse
 
 PIXIV_SESSID = os.getenv("PHPSESSID", "").strip()
 
+
+def escape_md_v2(text: str) -> str:
+    if not text:
+        return ""
+    for ch in r"_*[]()~`>#+-=|{}.!":
+        text = text.replace(ch, "\\" + ch)
+    return text
 
 def match_pixiv_url(text: str):
     return re.search(
@@ -18,20 +26,53 @@ def html_to_markdown_v2(raw_html: str) -> str:
     text = html.unescape(raw_html)
     text = re.sub(r'<\s*br\s*/?\s*>', '\n', text, flags=re.I)
 
-    def link_replacer(m):
-        url = m.group(1)
-        content = m.group(2)
-        content = re.sub(r'([_*[\]()~`>#+\-=|{}.!])', r'\\\1', content)
-        url = url.replace(")", "\\)").replace("(", "\\(")
-        return f"[{content}]({url})"
+    def escape_md(t):
+        if not t: return ""
+        for ch in r"_*[]()~`>#+-=|{}.!":
+            t = t.replace(ch, "\\" + ch)
+        return t
 
-    text = re.sub(r'<a [^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>',
-                  link_replacer,
-                  text,
-                  flags=re.I)
-    text = re.sub(r'<[^>]+>', '', text)
-    text = re.sub(r'\n{3,}', '\n\n', text).strip()
-    return text
+    # 链接清洗函数
+    def clean_url(u):
+        if "jump.php" in u:
+            try:
+                parsed = urllib.parse.urlparse(u)
+                qs = urllib.parse.parse_qs(parsed.query)
+                if 'url' in qs:
+                    return qs['url'][0]
+            except:
+                pass
+        return u
+    
+    pattern = re.compile(r'<a [^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', re.I | re.S)
+    
+    parts = []
+    last_idx = 0
+    
+    for m in pattern.finditer(text):
+        pre_text = text[last_idx:m.start()]
+        pre_text = re.sub(r'<[^>]+>', '', pre_text) # 去除其他 HTML 标签
+        parts.append(escape_md(pre_text))
+        
+        # 处理链接
+        url = clean_url(m.group(1))
+        content = m.group(2)
+        content = re.sub(r'<[^>]+>', '', content)
+        content = escape_md(content)
+        
+        safe_url = url.replace("\\", "\\\\").replace(")", "\\)")
+        
+        parts.append(f"[{content}]({safe_url})")
+        
+        last_idx = m.end()
+        
+    post_text = text[last_idx:]
+    post_text = re.sub(r'<[^>]+>', '', post_text)
+    parts.append(escape_md(post_text))
+    
+    result = "".join(parts)
+    result = re.sub(r'\n{3,}', '\n\n', result).strip()
+    return result
 
 
 def parse_page_selection(selection_raw: str, total_pages: int):
@@ -131,11 +172,11 @@ def fetch_pixiv_data(url: str):
         if data.get("error") or "body" not in data: return [], "", "normal"
 
         body = data["body"]
-        title = body.get("title", "")
+        title = escape_md_v2(body.get("title", ""))
         desc = html_to_markdown_v2(body.get("description", ""))
         tags = body.get("tags", {}).get("tags", [])
         tag_str = " ".join([
-            f"#{t['tag']}" for t in tags if isinstance(t, dict) and "tag" in t
+            f"\\#{escape_md_v2(t['tag'])}" for t in tags if isinstance(t, dict) and "tag" in t
         ])
 
         total_pages = int(body.get("pageCount", 1))

@@ -59,11 +59,16 @@ def escape_markdown_v2(text: str) -> str:
     return text
 
 
-def make_markdown_caption(display_url: str, text: str):
+def make_markdown_caption(display_url: str, text: str, escape_body: bool = True):
     link_md = f"[{escape_markdown_v2(display_url)}]({display_url})"
     if not text:
         return link_md
-    body_md = escape_markdown_v2(text)
+    
+    if escape_body:
+        body_md = escape_markdown_v2(text)
+    else:
+        body_md = text
+
     body_md_lines = "\n".join(
         ["> " + line if line else ">" for line in body_md.splitlines()])
     return f"{link_md}\n\n{body_md_lines}"
@@ -383,11 +388,11 @@ async def handle_pixiv(update: Update,
         await send_files_as_documents(update, images, caption_md=None)
 
     elif parse_mode == "file_with_info":
-        caption_md = make_markdown_caption(display_url, pixiv_text)
+        caption_md = make_markdown_caption(display_url, pixiv_text, escape_body=False)
         await send_files_as_documents(update, images, caption_md=caption_md)
 
     else:  # parse_mode == "normal"
-        caption_md = make_markdown_caption(display_url, pixiv_text)
+        caption_md = make_markdown_caption(display_url, pixiv_text, escape_body=False)
         await send_media(update,
                          images,
                          caption_md=caption_md,
