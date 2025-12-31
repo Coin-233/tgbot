@@ -139,22 +139,43 @@ def fetch_pixiv_data(url: str):
         ])
 
         total_pages = int(body.get("pageCount", 1))
-        base_url = body.get("urls", {}).get("original", "")
-        if not base_url: return [], "", "normal"
 
-        prefix = base_url.rsplit("_p0", 1)[0]
-        ext = base_url.split(".")[-1]
-        all_image_urls = [f"{prefix}_p{i}.{ext}" for i in range(total_pages)]
+        urls_obj = body.get("urls", {})
+        base_url_orig = urls_obj.get("original", "")
+        base_url_reg = urls_obj.get("regular", "")
+
+        if not base_url_orig: return [], "", "normal"
 
         selected_pages = parse_page_selection(selection_raw, total_pages)
-        if selected_pages:
-            target_urls = [all_image_urls[i - 1] for i in selected_pages]
-            suffix = f" {','.join(map(str, selected_pages))}/{total_pages}" if total_pages > 1 else ""
-        else:
-            target_urls = all_image_urls
+        if not selected_pages:
+            selected_pages = list(range(1, total_pages + 1))
             suffix = ""
+        else:
+            suffix = f" {','.join(map(str, selected_pages))}/{total_pages}" if total_pages > 1 else ""
 
-        images = target_urls
+        images = []
+        
+        for i in selected_pages:
+            page_idx = i - 1
+            
+            curr_orig_url = base_url_orig.replace("_p0", f"_p{page_idx}")
+            
+            final_url = curr_orig_url
+
+            # 只有在普通模式时才检查大小
+            # 如果是 -o / -O 模式 app.py 会以文件发送，不受 10MB 限制，保持原图
+            if parse_mode == "normal" and base_url_reg:
+                try:
+                    head_resp = requests.head(curr_orig_url, headers=headers, timeout=2)
+                    if head_resp.ok:
+                        size = int(head_resp.headers.get("Content-Length", 0))
+                        if size > 10 * 1024 * 1024:
+                            final_url = base_url_reg.replace("_p0", f"_p{page_idx}")
+                            # print(f"Image too large ({size} bytes), switching to regular: {final_url}")
+                except Exception:
+                    pass
+
+            images.append(final_url)
 
         if only_image:
             return images, "", parse_mode
