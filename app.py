@@ -5,12 +5,14 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from telegram import Update, InputMediaPhoto, InputMediaVideo
-from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, ContextTypes, filters
+import uuid
+from telegram import Update, InputMediaPhoto, InputMediaVideo, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, ContextTypes, filters, CallbackQueryHandler
 
 from twitter_parser import match_twitter_url, fetch_tweet_data
 from pixiv_parser import match_pixiv_url, fetch_pixiv_data, download_pixiv_images
 from bili_parser import match_bilibili_url, fetch_bilibili_data, download_bili_images
+from saucenao_search import search_saucenao
 from stats_manager import load_stats, save_stats
 from file_sender import send_files_as_documents
 
@@ -19,6 +21,8 @@ if proxy:
     os.environ["HTTP_PROXY"] = proxy
     os.environ["HTTPS_PROXY"] = proxy
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+STOKEN = os.getenv("STOKEN")
+SEARCH_CACHE = {}
 stats = load_stats()
 START_MESSAGE_MD = r"""
 发送 *Twitter*, *Pixiv* 或 *Bilibili动态* 链接，机器人将自动解析并发送图片\.
@@ -47,8 +51,10 @@ Pixiv 解析指令
 
 混合使用示例: `https://www.pixiv.net/artworks/ID \+3 \-des`
 
-其他命令
+搜图指令
+• `/s`：回复包含图片的这条消息，或在发送图片时在标题中带上 /s, 进行 SauceNAO 搜图\.
 
+其他命令
 • `/stat`：查看总解析统计信息\.
 """
 
@@ -223,8 +229,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     text = (msg.text or msg.caption or "").strip()
+    if not text: return
 
-    if not text:
+    if text == "/s" or text.startswith("/s "):
+        await s_command(update, context)
         return
 
     is_channel_identity_post = msg.sender_chat is not None and msg.sender_chat.type == 'channel'
@@ -428,11 +436,154 @@ async def handle_bilibili(update: Update,
 
     else:
         caption_md = make_markdown_caption(display_url, bili_text)
-        await send_media(update,
-                         images,
-                         caption_md=caption_md,
-                         skip_size_check=force_original_file_only)
+        await send_media(update, images, caption_md=caption_md, skip_size_check=force_original_file_only)
 
+async def s_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.message
+    target_msg = msg.reply_to_message if msg.reply_to_message else msg
+
+    if not target_msg.photo:
+        await msg.reply_text("请回复一张图片, 或直接发送带图消息并附带 /s 指令")
+        return
+
+    if not STOKEN:
+        await msg.reply_text("未配置 STOKEN")
+        return
+
+    # 占位图
+    photo_file_id = target_msg.photo[-1].file_id
+    status_msg = await msg.reply_photo(
+        photo=photo_file_id,
+        caption="正在搜索 SauceNAO...",
+        reply_to_message_id=target_msg.message_id
+    )
+
+    try:
+        photo = target_msg.photo[-1]
+        file_obj = await photo.get_file()
+        image_bytes = await file_obj.download_as_bytearray()
+        
+        status, data = await asyncio.to_thread(search_saucenao, image_bytes, STOKEN)
+        
+        if status != 0:
+            await status_msg.edit_caption(caption=f"❌ {data}")
+            return
+
+        # 存入缓存 这里记得以后改
+        search_id = str(uuid.uuid4())[:8]
+        SEARCH_CACHE[search_id] = data
+
+        thumbnail, caption, reply_markup = get_search_page(search_id, 0)
+
+        if thumbnail:
+            try:
+                await status_msg.edit_media(
+                    media=InputMediaPhoto(
+                        media=thumbnail,
+                        caption=caption,
+                        parse_mode="MarkdownV2"
+                    ),
+                    reply_markup=reply_markup
+                )
+            except Exception as e:
+                # 如果缩略图加载失败 保留原图 只更新文字
+                print(f"Thumbnail load failed: {e}")
+                await status_msg.edit_caption(
+                    caption=f"{caption}\n\n预览图加载失败, 当前显示为原图",
+                    parse_mode="MarkdownV2",
+                    reply_markup=reply_markup
+                )
+        else:
+            # 如果结果没有缩略图, 只更新文字
+            await status_msg.edit_caption(
+                caption=caption,
+                parse_mode="MarkdownV2",
+                reply_markup=reply_markup
+            )
+
+    except Exception as e:
+        print(f"Search error: {e}")
+        try:
+            await status_msg.edit_caption(caption=f"内部错误: {e}")
+        except:
+            pass
+                 
+def get_search_page(search_id, index):
+    results = SEARCH_CACHE.get(search_id)
+    if not results:
+        return None, None, None
+
+    total = len(results)
+    current_index = index % total 
+    item = results[current_index]
+
+    similarity = escape_markdown_v2(str(item['similarity']))
+    
+    title = escape_markdown_v2(item['title'] or "无标题")
+    author = escape_markdown_v2(item['author'] or "未知作者")
+    
+    caption = (
+        f" *SauceNAO 搜索结果* \\({current_index + 1}/{total}\\)\n"
+        f"——————————————\n"
+        f"相似度: *{similarity}%*\n"
+        f"标题: {title}\n"
+        f"作者: {author}\n"
+    )
+
+    prev_idx = (current_index - 1) % total
+    next_idx = (current_index + 1) % total
+    
+    buttons = [
+        [
+            InlineKeyboardButton("⬅️", callback_data=f"s:{search_id}:{prev_idx}"),
+            InlineKeyboardButton(f"{current_index + 1}/{total}", callback_data="ignore"),
+            InlineKeyboardButton("➡️", callback_data=f"s:{search_id}:{next_idx}"),
+        ]
+    ]
+    
+    if item['url']:
+        buttons.append([InlineKeyboardButton("打开来源", url=item['url'])])
+
+    return item['thumbnail'], caption, InlineKeyboardMarkup(buttons)
+
+async def search_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer() # 消除按钮加载动画
+
+    data = query.data
+    
+    if data == "ignore":
+        return
+
+    if not data.startswith("s:"):
+        return
+
+    try:
+        _, search_id, index_str = data.split(":")
+        index = int(index_str)
+    except ValueError:
+        return
+
+    thumbnail, caption, reply_markup = get_search_page(search_id, index)
+    
+    if not thumbnail:
+        await query.edit_message_text("搜索结果已过期或不存在")
+        return
+
+    try:
+        await query.edit_message_media(
+            media=InputMediaPhoto(
+                media=thumbnail,
+                caption=caption,
+                parse_mode="MarkdownV2"
+            ),
+            reply_markup=reply_markup
+        )
+    except Exception as e:
+        if "Message is not modified" in str(e):
+            pass
+        else:
+            print(f"Edit error: {e}")
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(START_MESSAGE_MD, parse_mode="MarkdownV2")
@@ -450,6 +601,8 @@ def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("stat", stat_command))
+    app.add_handler(CommandHandler("s", s_command))
+    app.add_handler(CallbackQueryHandler(search_button_handler, pattern="^s:"))
     app.add_handler(
         MessageHandler((filters.TEXT | filters.CAPTION) & ~filters.COMMAND,
                        handle_message))
