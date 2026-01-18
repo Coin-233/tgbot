@@ -548,27 +548,29 @@ def get_search_page(search_id, index):
 
 async def search_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer() # 消除按钮加载动画
-
     data = query.data
     
     if data == "ignore":
+        await query.answer()# 消除按钮加载动画
         return
 
     if not data.startswith("s:"):
+        await query.answer()
         return
 
     try:
         _, search_id, index_str = data.split(":")
         index = int(index_str)
     except ValueError:
+        await query.answer()
         return
 
     thumbnail, caption, reply_markup = get_search_page(search_id, index)
     
     if not thumbnail:
-        await query.edit_message_text("搜索结果已过期或不存在")
+        await query.answer("搜索结果已过期, 请重新发送图片搜索", show_alert=True)
         return
+    await query.answer()
 
     try:
         await query.edit_message_media(
