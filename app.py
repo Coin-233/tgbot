@@ -1,10 +1,11 @@
 import os
 import re
+import asyncio
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from telegram import Update, InputMediaPhoto, InputPaidMediaVideo
+from telegram import Update, InputMediaPhoto, InputMediaVideo
 from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, ContextTypes, filters
 
 from twitter_parser import match_twitter_url, fetch_tweet_data
@@ -163,18 +164,16 @@ async def send_media(update, images, caption_md, skip_size_check=False):
                 is_bili = True
 
         if should_retry and (is_pixiv or is_bili):
-            print(
-                "Detected anti-hotlink error, switching to local download mode..."
-            )
+            print("Detected anti-hotlink error, switching to local download mode...")
             try:
                 await update.message.chat.send_action("upload_photo")
 
                 local_files = []
 
                 if is_pixiv:
-                    local_files = download_pixiv_images(images)
+                    local_files = await asyncio.to_thread(download_pixiv_images, images)
                 elif is_bili:
-                    local_files = download_bili_images(images)
+                    local_files = await asyncio.to_thread(download_bili_images, images)
 
                 if local_files:
                     # 检查是否有文件超过 10MB
@@ -341,8 +340,7 @@ async def handle_twitter(update: Update,
     fetch_force_original = force_original_file_only or parse_mode in [
         "file_only", "file_with_info"
     ]
-    images, tweet_text = fetch_tweet_data(
-        url, force_original_file_only=fetch_force_original)
+    images, tweet_text = await asyncio.to_thread(fetch_tweet_data, url, force_original_file_only=fetch_force_original)
 
     if not images and not tweet_text:
         await update.message.reply_text("喵~ 这个推文抓不到, 可能被删掉或不公开")
@@ -368,7 +366,10 @@ async def handle_twitter(update: Update,
 
     for f in images:
         if os.path.exists(f):
-            os.remove(f)
+            try:
+                os.remove(f)
+            except:
+                pass
 
 
 async def handle_pixiv(update: Update,
@@ -377,7 +378,7 @@ async def handle_pixiv(update: Update,
                        force_original_file_only: bool = False):
     await update.message.chat.send_action("upload_photo")
 
-    images, pixiv_text, parse_mode = fetch_pixiv_data(parse_input)
+    images, pixiv_text, parse_mode = await asyncio.to_thread(fetch_pixiv_data, parse_input)
 
     if not images:
         await update.message.reply_text("喵~ Pixiv 作品抓不到, 可能被删掉或不公开")
@@ -408,7 +409,7 @@ async def handle_bilibili(update: Update,
                           force_original_file_only: bool = False):
     await update.message.chat.send_action("upload_photo")
 
-    images, bili_text, parse_mode = fetch_bilibili_data(parse_input)
+    images, bili_text, parse_mode = await asyncio.to_thread(fetch_bilibili_data, parse_input)
 
     if not images and not bili_text:
         await update.message.reply_text("喵~ 这个动态抓不到, 可能被删掉或设为仅自己可见")
