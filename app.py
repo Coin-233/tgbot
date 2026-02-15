@@ -109,43 +109,55 @@ async def send_media(update, images, caption_md, skip_size_check=False):
             media_input = get_media_input(file_path)
 
             is_url = isinstance(media_input, str)
+            
+            ext = os.path.splitext(file_path)[1] if not is_url else ".jpg"
+            custom_filename = f"{work_id}{ext}" if work_id else None
 
             if file_path.endswith(".mp4"):
                 await update.message.reply_video(media_input,
                                                  caption=caption_md,
-                                                 parse_mode="MarkdownV2")
+                                                 parse_mode="MarkdownV2",
+                                                 filename=custom_filename)
             elif not is_url:
                 file_size = os.path.getsize(file_path)
                 if not skip_size_check and file_size > MAX_PHOTO_SIZE:
                     await update.message.reply_document(
                         media_input,
                         caption=caption_md,
-                        parse_mode="MarkdownV2")
+                        parse_mode="MarkdownV2",
+                        filename=custom_filename)
                 else:
                     await update.message.reply_photo(media_input,
                                                      caption=caption_md,
-                                                     parse_mode="MarkdownV2")
+                                                     parse_mode="MarkdownV2",
+                                                     filename=custom_filename)
             else:
                 await update.message.reply_photo(media_input,
                                                  caption=caption_md,
-                                                 parse_mode="MarkdownV2")
+                                                 parse_mode="MarkdownV2",
+                                                 filename=custom_filename)
 
         else:
             for i, file_path in enumerate(images):
                 caption = caption_md if i == 0 else None
                 parse_mode = "MarkdownV2" if i == 0 else None
                 media_input = get_media_input(file_path)
+                
+                ext = os.path.splitext(file_path)[1] if not isinstance(media_input, str) else ".jpg"
+                custom_filename = f"{work_id}_{i+1}{ext}" if work_id else None
 
                 if file_path.endswith(".mp4"):
                     media_group.append(
                         InputMediaVideo(media=media_input,
                                         caption=caption,
-                                        parse_mode=parse_mode))
+                                        parse_mode=parse_mode,
+                                        filename=custom_filename))
                 else:
                     media_group.append(
                         InputMediaPhoto(media=media_input,
                                         caption=caption,
-                                        parse_mode=parse_mode))
+                                        parse_mode=parse_mode,
+                                        filename=custom_filename))
 
             for i in range(0, total, 10):
                 batch = media_group[i:i + 10]
@@ -193,13 +205,15 @@ async def send_media(update, images, caption_md, skip_size_check=False):
                     if has_large_file:
                         await send_files_as_documents(update, 
                                                     local_files, 
-                                                    caption_md=caption_md)
+                                                    caption_md=caption_md,
+                                                    work_id=work_id)
                     else:
 
                         await send_media(update,
                                          local_files,
                                          caption_md,
-                                         skip_size_check=False)
+                                         skip_size_check=False,
+                                         work_id=work_id)
 
                     for f in local_files:
                         try:
@@ -304,7 +318,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         arg_tokens = []
 
         for i, token in enumerate(parts):
-            if "t.bilibili.com/" in token:
+            if "t.bilibili.com/" in token or "bilibili.com/opus/" in token:
                 bili_link = token.strip()
                 j = i + 1
                 while j < len(parts) and parts[j].startswith("-"):
@@ -317,7 +331,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         parse_input = f"{bili_link} {' '.join(arg_tokens)}".strip()
 
-        clean_match = re.search(r"https?://t\.bilibili\.com/\d+", bili_link)
+        clean_match = re.search(r"https?://(?:t\.bilibili\.com|(?:www\.)?bilibili\.com/opus)/\d+", bili_link)
         display_url = clean_match.group(0) if clean_match else bili_link
 
         await handle_bilibili(
@@ -357,20 +371,22 @@ async def handle_twitter(update: Update,
     stats["total_links"] += 1
     stats["total_images"] += len(images)
     save_stats(stats)
+    
+    work_id = url.rstrip('/').split('/')[-1].split('?')[0]
 
     if force_original_file_only or parse_mode == "file_only":
-        await send_files_as_documents(update, images, caption_md=None)
+        await send_files_as_documents(update, images, caption_md=None, work_id=work_id)
 
     elif parse_mode == "file_with_info":
         caption_md = make_markdown_caption(url, tweet_text)
-        await send_files_as_documents(update, images, caption_md=caption_md)
+        await send_files_as_documents(update, images, caption_md=caption_md, work_id=work_id)
 
     else:
         caption_md = make_markdown_caption(url, tweet_text)
         await send_media(update,
                          images,
                          caption_md=caption_md,
-                         skip_size_check=force_original_file_only)
+                         skip_size_check=force_original_file_only, work_id=work_id)
 
     for f in images:
         if os.path.exists(f):
@@ -395,20 +411,24 @@ async def handle_pixiv(update: Update,
     stats["total_links"] += 1
     stats["total_images"] += len(images)
     save_stats(stats)
+    
+    id_match = re.search(r"(?:artworks/|illust_id=)(\d+)", display_url)
+    work_id = id_match.group(1) if id_match else "pixiv"
 
     if force_original_file_only or parse_mode == "file_only":
-        await send_files_as_documents(update, images, caption_md=None)
+        await send_files_as_documents(update, images, caption_md=None, work_id=work_id)
 
     elif parse_mode == "file_with_info":
         caption_md = make_markdown_caption(display_url, pixiv_text, escape_body=False)
-        await send_files_as_documents(update, images, caption_md=caption_md)
+        await send_files_as_documents(update, images, caption_md=caption_md, work_id=work_id)
 
     else:  # parse_mode == "normal"
         caption_md = make_markdown_caption(display_url, pixiv_text, escape_body=False)
         await send_media(update,
                          images,
                          caption_md=caption_md,
-                         skip_size_check=force_original_file_only)
+                         skip_size_check=force_original_file_only,
+                         work_id=work_id)
 
 
 async def handle_bilibili(update: Update,
@@ -427,16 +447,19 @@ async def handle_bilibili(update: Update,
     stats["total_images"] += len(images)
     save_stats(stats)
 
+    id_match = re.search(r"\d+", display_url)
+    work_id = id_match.group(0) if id_match else "bilibili"
+
     if force_original_file_only or parse_mode == "file_only":
-        await send_files_as_documents(update, images, caption_md=None)
+        await send_files_as_documents(update, images, caption_md=None, work_id=work_id)
 
     elif parse_mode == "file_with_info":
         caption_md = make_markdown_caption(display_url, bili_text)
-        await send_files_as_documents(update, images, caption_md=caption_md)
+        await send_files_as_documents(update, images, caption_md=caption_md, work_id=work_id)
 
     else:
         caption_md = make_markdown_caption(display_url, bili_text)
-        await send_media(update, images, caption_md=caption_md, skip_size_check=force_original_file_only)
+        await send_media(update, images, caption_md=caption_md, skip_size_check=force_original_file_only, work_id=work_id)
 
 async def s_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
