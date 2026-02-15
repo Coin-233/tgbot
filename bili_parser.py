@@ -5,7 +5,7 @@ import html
 
 
 def match_bilibili_url(text: str):
-    return re.search(r"(?:https?://)?t\.bilibili\.com/(\d+)", text)
+    return re.search(r"(?:https?://)?(?:t\.bilibili\.com|(?:www\.)?bilibili\.com/opus)/(\d+)", text)
 
 
 def html_to_markdown_v2(raw_html: str) -> str:
@@ -68,7 +68,7 @@ def download_bili_images(url_list):
 
 def fetch_bilibili_data(url: str):
     try:
-        match = re.search(r"(?:https?://)?t\.bilibili\.com/(\d+)(.*)", url)
+        match = re.search(r"(?:https?://)?(?:t\.bilibili\.com|(?:www\.)?bilibili\.com/opus)/(\d+)(.*)", url)
         if not match:
             return [], "", "normal"
 
@@ -87,9 +87,8 @@ def fetch_bilibili_data(url: str):
         headers = {
             "User-Agent":
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
-            "Referer": f"https://t.bilibili.com/{dynamic_id}",
+            "Referer": f"https://t.bilibili.com/{dynamic_id}", 
         }
-
         resp = requests.get(api_url, headers=headers, timeout=10)
         if resp.status_code != 200:
             return [], "", "normal"
