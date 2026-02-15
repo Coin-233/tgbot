@@ -81,7 +81,7 @@ def make_markdown_caption(display_url: str, text: str, escape_body: bool = True)
     return f"{link_md}\n\n{body_md_lines}"
 
 
-async def send_media(update, images, caption_md, skip_size_check=False):
+async def send_media(update, images, caption_md, skip_size_check=False, work_id=None):
     files_to_close = []
 
     try:
