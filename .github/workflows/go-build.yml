@@ -33,7 +33,7 @@ jobs:
 
       - name: Build Binary
         run: |
-          go build -ldflags="-s -w" -o tgbot main.go
+          go build -ldflags="-s -w" -o tgbot .
 
       - name: Compress with UPX
         run: upx --best --lzma my_parser
