@@ -5,10 +5,12 @@ on:
     branches: [ "main" ]
     paths:
       - 'go/**'
+      - '.github/workflows/**'
   pull_request:
     branches: [ "main" ]
     paths:
       - 'go/**'
+      - '.github/workflows/**'
 
 jobs:
   build:
@@ -26,6 +28,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.25.4'
+          cache: true
           cache-dependency-path: go/go.sum
 
       - name: Install UPX
@@ -36,7 +39,8 @@ jobs:
           go build -ldflags="-s -w" -o tgbot .
 
       - name: Compress with UPX
-        run: upx --best --lzma my_parser
+        run: |
+          upx --best --lzma tgbot
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
