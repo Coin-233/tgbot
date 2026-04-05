@@ -227,6 +227,8 @@ func downloadImage(imgURL string) (string, error) {
 		req.Header.Set("Referer", "https://www.pixiv.net/")
 	} else if strings.Contains(imgURL, "hdslb.com") || strings.Contains(imgURL, "bilibili") {
 		req.Header.Set("Referer", "https://t.bilibili.com/")
+	} else if strings.Contains(imgURL, "kemono.cr") {
+		req.Header.Set("Referer", "https://kemono.cr/")
 	}
 
 	client := &http.Client{Timeout: 20 * time.Second}
@@ -466,6 +468,33 @@ func handleMessage(c tele.Context) error {
 
 		if forceOriginal {
 			parseMode = "file_only"
+		}
+		return sendMedia(c, images, caption, parseMode, workID)
+	}
+
+	// Kemono
+	if MatchKemonoPostURL(text) {
+		url := kemonoPostPattern.FindString(text)
+
+		bot := c.Bot()
+		bot.Send(c.Chat(), tele.UploadingDocument)
+
+		workID := "kemono"
+		if matches := kemonoPostPattern.FindStringSubmatch(url); len(matches) >= 4 {
+			workID = matches[3]
+		}
+
+		images, textInfo, parseMode := FetchKemonoPostData(text)
+		if len(images) == 0 && textInfo == "" {
+			return c.Reply("喵~ 这个 Kemono 帖子抓不到, 可能已被删掉或不存在")
+		}
+
+		addStats(1, len(images))
+
+		caption := makeMarkdownCaption(url, textInfo, false)
+
+		if forceOriginal && parseMode == "normal" {
+			parseMode = "file_with_info"
 		}
 		return sendMedia(c, images, caption, parseMode, workID)
 	}
