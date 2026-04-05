@@ -5,7 +5,9 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -48,6 +50,25 @@ const startMessageMD = `发送 *Twitter*, *Pixiv* 或 *Bilibili动态* 链接，
 *其他命令*
 • ` + "`/stat`" + `：查看总解析统计信息\.`
 
+// 发送聊天状态
+func keepSendingAction(c tele.Context, action tele.ChatAction) chan struct{} {
+	stopChan := make(chan struct{})
+	go func() {
+		c.Bot().Send(c.Chat(), action)
+		ticker := time.NewTicker(4 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopChan:
+				return
+			case <-ticker.C:
+				c.Bot().Send(c.Chat(), action)
+			}
+		}
+	}()
+	return stopChan
+}
+
 // 组装带链接的 MarkdownV2 文本
 func makeMarkdownCaption(url, text string, escapeBody bool) string {
 	linkMd := fmt.Sprintf("[%s](%s)", escapeMDV2(url), url)
@@ -89,7 +110,8 @@ func sendMedia(c tele.Context, images []string, caption string, parseMode string
 		if strings.Contains(errMsg, "webpage_media_empty") ||
 			strings.Contains(errMsg, "wrong type") ||
 			strings.Contains(errMsg, "failed to get http") ||
-			strings.Contains(errMsg, "webpage_curl_failed") {
+			strings.Contains(errMsg, "webpage_curl_failed") ||
+			strings.Contains(errMsg, "request entity too large") {
 
 			return sendMediaWithFallback(c, images, caption, parseMode, workID)
 		}
@@ -120,23 +142,27 @@ func sendMediaBatch(c tele.Context, images []string, caption string, parseMode s
 			file = tele.FromURL(imgPath)
 		}
 
-		// 提取正确的扩展名并拼接文件名
 		ext := ".jpg"
-		lowerPath := strings.ToLower(imgPath)
-		if strings.Contains(lowerPath, ".png") {
-			ext = ".png"
-		} else if strings.Contains(lowerPath, ".gif") {
-			ext = ".gif"
-		} else if strings.Contains(lowerPath, ".mp4") {
-			ext = ".mp4"
+		if parsedUrl, err := url.Parse(imgPath); err == nil {
+			if parsedExt := filepath.Ext(parsedUrl.Path); parsedExt != "" {
+				ext = strings.ToLower(parsedExt)
+			}
 		}
 
 		fileName := fmt.Sprintf("%s%s", workID, ext)
 		if len(images) > 1 {
-			fileName = fmt.Sprintf("%s_%d%s", workID, i+1, ext) // 多图加上序号
+			fileName = fmt.Sprintf("%s_%d%s", workID, i+1, ext)
 		}
 
-		if parseMode == "file_only" || parseMode == "file_with_info" {
+		isMedia := false
+		switch ext {
+		case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".mp4":
+			isMedia = true
+		}
+
+		forceDocument := !isMedia || parseMode == "file_only" || parseMode == "file_with_info"
+
+		if forceDocument {
 			doc := &tele.Document{File: file, FileName: fileName}
 			if i == lastIdx && caption != "" {
 				doc.Caption = caption
@@ -159,14 +185,30 @@ func sendMediaBatch(c tele.Context, images []string, caption string, parseMode s
 		}
 	}
 
+	if len(album) == 0 {
+		return nil
+	}
+
+	opts := &tele.SendOptions{
+		ReplyTo:   c.Message(),
+		ParseMode: tele.ModeMarkdownV2,
+	}
+
+	if len(album) == 1 {
+		switch v := album[0].(type) {
+		case *tele.Photo:
+			return c.Send(v, opts)
+		case *tele.Video:
+			return c.Send(v, opts)
+		case *tele.Document:
+			return c.Send(v, opts)
+		}
+	}
+
 	for i := 0; i < len(album); i += 10 {
 		end := i + 10
 		if end > len(album) {
 			end = len(album)
-		}
-		opts := &tele.SendOptions{
-			ReplyTo:   c.Message(),
-			ParseMode: tele.ModeMarkdownV2,
 		}
 		err := c.SendAlbum(album[i:end], opts)
 		if err != nil {
@@ -178,9 +220,6 @@ func sendMediaBatch(c tele.Context, images []string, caption string, parseMode s
 
 // 本地下载并发送回退逻辑
 func sendMediaWithFallback(c tele.Context, images []string, caption string, parseMode string, workID string) error {
-	bot := c.Bot()
-	bot.Send(c.Chat(), tele.UploadingDocument)
-
 	var localFiles []string
 	defer func() {
 		for _, f := range localFiles {
@@ -192,10 +231,23 @@ func sendMediaWithFallback(c tele.Context, images []string, caption string, pars
 	for _, imgURL := range images {
 		localPath, err := downloadImage(imgURL)
 		if err == nil {
-			localFiles = append(localFiles, localPath)
 			fi, err := os.Stat(localPath)
-			if err == nil && fi.Size() > 10*1024*1024 {
-				hasLargeFile = true
+			if err == nil {
+				if fi.Size() > 50*1024*1024 {
+					log.Printf("文件超过 50MB 限制被跳过: %s", imgURL)
+					os.Remove(localPath)
+					sizeMB := float64(fi.Size()) / 1024 / 1024
+
+					sizeStr := strings.ReplaceAll(fmt.Sprintf("%.1f", sizeMB), ".", "\\.")
+
+					caption += fmt.Sprintf("\n\n_有一个文件大小为 %s MB, 超出了 Telegram 机器人的 50MB 限制，已被跳过。_", sizeStr)
+					continue
+				}
+
+				if fi.Size() > 10*1024*1024 {
+					hasLargeFile = true
+				}
+				localFiles = append(localFiles, localPath)
 			}
 		} else {
 			log.Printf("本地下载失败: %s, 错误: %v", imgURL, err)
@@ -204,9 +256,9 @@ func sendMediaWithFallback(c tele.Context, images []string, caption string, pars
 
 	if len(localFiles) == 0 {
 		if caption != "" {
-			return c.Reply(caption+"\n\n_由于源站限制, 图片下载并发送失败_", tele.ModeMarkdownV2)
+			return c.Reply(caption+"\n\n_由于源站限制或文件过大, 所有内容发送失败._", tele.ModeMarkdownV2)
 		}
-		return fmt.Errorf("所有图片下载失败")
+		return fmt.Errorf("所有文件处理失败")
 	}
 
 	if hasLargeFile && parseMode == "normal" {
@@ -242,14 +294,12 @@ func downloadImage(imgURL string) (string, error) {
 		return "", fmt.Errorf("bad status: %d", resp.StatusCode)
 	}
 
-	// 提取拓展名
+	// 使用真实扩展名
 	ext := ".jpg"
-	if strings.Contains(imgURL, ".png") {
-		ext = ".png"
-	} else if strings.Contains(imgURL, ".gif") {
-		ext = ".gif"
-	} else if strings.Contains(imgURL, ".mp4") {
-		ext = ".mp4"
+	if parsedUrl, err := url.Parse(imgURL); err == nil {
+		if parsedExt := filepath.Ext(parsedUrl.Path); parsedExt != "" {
+			ext = strings.ToLower(parsedExt)
+		}
 	}
 
 	tmpFile, err := os.CreateTemp("", "tgbot-*"+ext)
@@ -406,8 +456,8 @@ func handleMessage(c tele.Context) error {
 			parseMode = "file_with_info"
 		}
 
-		bot := c.Bot()
-		bot.Send(c.Chat(), tele.UploadingDocument)
+		stopAction := keepSendingAction(c, tele.UploadingDocument)
+		defer close(stopAction)
 
 		images, textInfo := FetchTweetData(url, forceOriginal || parseMode != "normal")
 		if len(images) == 0 && textInfo == "" {
@@ -425,8 +475,8 @@ func handleMessage(c tele.Context) error {
 
 	// Pixiv
 	if MatchPixivURL(text) {
-		bot := c.Bot()
-		bot.Send(c.Chat(), tele.UploadingPhoto)
+		stopAction := keepSendingAction(c, tele.UploadingPhoto)
+		defer close(stopAction)
 
 		workID := "pixiv"
 		if matches := regexp.MustCompile(`(?:artworks/|illust_id=)(\d+)`).FindStringSubmatch(text); len(matches) > 1 {
@@ -449,8 +499,8 @@ func handleMessage(c tele.Context) error {
 
 	// Bilibili
 	if MatchBilibiliURL(text) {
-		bot := c.Bot()
-		bot.Send(c.Chat(), tele.UploadingPhoto)
+		stopAction := keepSendingAction(c, tele.UploadingPhoto)
+		defer close(stopAction)
 
 		workID := "bilibili"
 		if matches := bilibiliPattern.FindStringSubmatch(text); len(matches) > 1 {
@@ -476,8 +526,8 @@ func handleMessage(c tele.Context) error {
 	if MatchKemonoPostURL(text) {
 		url := kemonoPostPattern.FindString(text)
 
-		bot := c.Bot()
-		bot.Send(c.Chat(), tele.UploadingDocument)
+		stopAction := keepSendingAction(c, tele.UploadingDocument)
+		defer close(stopAction)
 
 		workID := "kemono"
 		if matches := kemonoPostPattern.FindStringSubmatch(url); len(matches) >= 4 {

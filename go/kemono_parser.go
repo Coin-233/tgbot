@@ -55,8 +55,9 @@ func FetchKemonoPostData(urlStr string) ([]string, string, string) {
 
 	var data struct {
 		Post struct {
-			Title string `json:"title"`
-			File  struct {
+			Title   string `json:"title"`
+			Content string `json:"content"`
+			File    struct {
 				Path string `json:"path"`
 			} `json:"file"`
 			Attachments []struct {
@@ -84,10 +85,17 @@ func FetchKemonoPostData(urlStr string) ([]string, string, string) {
 	}
 
 	title := strings.TrimSpace(data.Post.Title)
-	caption := ""
+	content := strings.TrimSpace(data.Post.Content)
+
+	var parts []string
 	if title != "" {
-		caption = escapeMDV2(title)
+		parts = append(parts, escapeMDV2(title))
 	}
+	if content != "" {
+		parts = append(parts, htmlToMarkdownV2(content))
+	}
+
+	caption := strings.Join(parts, "\n\n")
 
 	return images, caption, parseMode
 }
