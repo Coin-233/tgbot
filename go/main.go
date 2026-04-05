@@ -377,6 +377,8 @@ func handleMessage(c tele.Context) error {
 	if MatchTwitterURL(text) {
 		url := twitterPattern.FindString(text)
 
+		url = strings.Replace(url, "x.com/", "twitter.com/", 1)
+
 		workID := "twitter"
 		if matches := regexp.MustCompile(`status/(\d+)`).FindStringSubmatch(url); len(matches) > 1 {
 			workID = matches[1]
