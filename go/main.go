@@ -240,7 +240,7 @@ func sendMediaWithFallback(c tele.Context, images []string, caption string, pars
 
 					sizeStr := strings.ReplaceAll(fmt.Sprintf("%.1f", sizeMB), ".", "\\.")
 
-					caption += fmt.Sprintf("\n\n_有一个文件大小为 %s MB, 超出了 Telegram 机器人的 50MB 限制，已被跳过。_", sizeStr)
+					caption += fmt.Sprintf("\n\n_有一个文件大小为 %s MB, 超出了 Telegram 机器人的 50MB 限制, 已被跳过\\._", sizeStr)
 					continue
 				}
 
@@ -256,7 +256,7 @@ func sendMediaWithFallback(c tele.Context, images []string, caption string, pars
 
 	if len(localFiles) == 0 {
 		if caption != "" {
-			return c.Reply(caption+"\n\n_由于源站限制或文件过大, 所有内容发送失败._", tele.ModeMarkdownV2)
+			return c.Reply(caption+"\n\n_由于源站限制或文件过大, 所有内容发送失败\\._", tele.ModeMarkdownV2)
 		}
 		return fmt.Errorf("所有文件处理失败")
 	}
