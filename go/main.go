@@ -264,6 +264,7 @@ func downloadImage(imgURL string) (string, error) {
 func main() {
 	_ = godotenv.Load()
 	loadStats()
+	startKemonoUpdater()
 
 	proxy := os.Getenv("PROXY")
 	if proxy != "" {
@@ -294,6 +295,9 @@ func main() {
 		globalStats.mu.Unlock()
 		return c.Reply(msg)
 	})
+
+	// 命令: /lookup
+	bot.Handle("/lookup", handleLookupCommand)
 
 	// 处理文本和图文消息
 	bot.Handle(tele.OnText, handleMessage)
@@ -350,6 +354,15 @@ func main() {
 				searchID := parts[1]
 				index, _ := strconv.Atoi(parts[2])
 				renderSauceNaoPage(bot, c.Message(), searchID, index)
+			}
+		}
+
+		if strings.HasPrefix(data, "k:") {
+			parts := strings.Split(data, ":")
+			if len(parts) == 3 {
+				service := parts[1]
+				id := parts[2]
+				HandleKemonoCallback(c, service, id)
 			}
 		}
 		return c.Respond()
