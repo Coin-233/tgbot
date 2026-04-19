@@ -222,6 +222,7 @@ func sendMediaBatch(c tele.Context, images []string, caption string, parseMode s
 func sendMediaWithFallback(c tele.Context, images []string, caption string, parseMode string, workID string) error {
 	var localFiles []string
 	defer func() {
+		// 发送完成后清理残余本地文件
 		for _, f := range localFiles {
 			os.Remove(f)
 		}
@@ -233,17 +234,6 @@ func sendMediaWithFallback(c tele.Context, images []string, caption string, pars
 		if err == nil {
 			fi, err := os.Stat(localPath)
 			if err == nil {
-				if fi.Size() > 50*1024*1024 {
-					log.Printf("文件超过 50MB 限制被跳过: %s", imgURL)
-					os.Remove(localPath)
-					sizeMB := float64(fi.Size()) / 1024 / 1024
-
-					sizeStr := strings.ReplaceAll(fmt.Sprintf("%.1f", sizeMB), ".", "\\.")
-
-					caption += fmt.Sprintf("\n\n_有一个文件大小为 %s MB, 超出了 Telegram 机器人的 50MB 限制, 已被跳过\\._", sizeStr)
-					continue
-				}
-
 				if fi.Size() > 10*1024*1024 {
 					hasLargeFile = true
 				}
@@ -251,12 +241,15 @@ func sendMediaWithFallback(c tele.Context, images []string, caption string, pars
 			}
 		} else {
 			log.Printf("本地下载失败: %s, 错误: %v", imgURL, err)
+			if strings.Contains(err.Error(), "exceeds 50MB") {
+				caption += "\n\n_有一个文件超出了 Telegram 机器人的 50MB 限制, 已提前中断下载并跳过\\. _"
+			}
 		}
 	}
 
 	if len(localFiles) == 0 {
 		if caption != "" {
-			return c.Reply(caption+"\n\n_由于源站限制或文件过大, 所有内容发送失败\\._", tele.ModeMarkdownV2)
+			return c.Reply(caption+"\n\n_由于源站限制或文件过大, 所有内容发送失败\\. _", tele.ModeMarkdownV2)
 		}
 		return fmt.Errorf("所有文件处理失败")
 	}
@@ -294,7 +287,12 @@ func downloadImage(imgURL string) (string, error) {
 		return "", fmt.Errorf("bad status: %d", resp.StatusCode)
 	}
 
-	// 使用真实扩展名
+	// 如果响应头直接声明文件超过 50MB 直接终止
+	limitBytes := int64(50 * 1024 * 1024)
+	if resp.ContentLength > limitBytes {
+		return "", fmt.Errorf("exceeds 50MB limit (Content-Length)")
+	}
+
 	ext := ".jpg"
 	if parsedUrl, err := url.Parse(imgURL); err == nil {
 		if parsedExt := filepath.Ext(parsedUrl.Path); parsedExt != "" {
@@ -306,11 +304,22 @@ func downloadImage(imgURL string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer tmpFile.Close()
 
-	// 写入本地磁盘
-	_, err = io.Copy(tmpFile, resp.Body)
-	return tmpFile.Name(), err
+	written, err := io.Copy(tmpFile, io.LimitReader(resp.Body, limitBytes+1))
+	if err != nil {
+		tmpFile.Close()
+		os.Remove(tmpFile.Name())
+		return "", err
+	}
+
+	tmpFile.Close()
+
+	if written > limitBytes {
+		os.Remove(tmpFile.Name())
+		return "", fmt.Errorf("exceeds 50MB limit during streaming")
+	}
+
+	return tmpFile.Name(), nil
 }
 
 func main() {
