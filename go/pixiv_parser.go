@@ -56,7 +56,7 @@ func parsePageSelection(selectionRaw string, totalPages int) []int {
 	return selected
 }
 
-func FetchPixivData(urlStr string) ([]string, string, string) {
+func FetchPixivData(urlStr string, forceOriginal bool) ([]string, string, string) {
 	re := regexp.MustCompile(`(?:artworks/|illust_id=)(\d+)(.*)`)
 	matches := re.FindStringSubmatch(urlStr)
 	if len(matches) < 3 {
@@ -85,6 +85,10 @@ func FetchPixivData(urlStr string) ([]string, string, string) {
 		case "-O":
 			parseMode = "file_with_info"
 		}
+	}
+
+	if forceOriginal {
+		parseMode = "file_only"
 	}
 
 	selectionRaw := ""
@@ -148,6 +152,7 @@ func FetchPixivData(urlStr string) ([]string, string, string) {
 	}
 
 	baseOrig := data.Body.Urls.Original
+	baseReg := data.Body.Urls.Regular
 	if baseOrig == "" {
 		return nil, "", "normal"
 	}
@@ -169,8 +174,30 @@ func FetchPixivData(urlStr string) ([]string, string, string) {
 	var images []string
 	for _, p := range selectedPages {
 		pageIdx := p - 1
-		currURL := strings.Replace(baseOrig, "_p0", fmt.Sprintf("_p%d", pageIdx), 1)
-		images = append(images, currURL)
+		currOrigURL := strings.Replace(baseOrig, "_p0", fmt.Sprintf("_p%d", pageIdx), 1)
+		currRegURL := strings.Replace(baseReg, "_p0", fmt.Sprintf("_p%d", pageIdx), 1)
+		finalURL := currOrigURL
+
+		if parseMode == "normal" && currRegURL != "" {
+			headReq, _ := http.NewRequest("HEAD", currOrigURL, nil)
+			headReq.Header.Set("User-Agent", "Mozilla/5.0")
+			headReq.Header.Set("Referer", artworkURL)
+			if sessid := os.Getenv("PHPSESSID"); sessid != "" {
+				headReq.AddCookie(&http.Cookie{Name: "PHPSESSID", Value: strings.TrimSpace(sessid)})
+			}
+
+			headClient := &http.Client{Timeout: 3 * time.Second}
+			headResp, headErr := headClient.Do(headReq)
+
+			if headErr == nil {
+				if headResp.ContentLength > 10*1024*1024 {
+					finalURL = currRegURL
+				}
+				headResp.Body.Close()
+			}
+		}
+
+		images = append(images, finalURL)
 	}
 
 	if onlyImage {

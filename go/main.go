@@ -436,27 +436,24 @@ func main() {
 // 路由分发器
 func handleMessage(c tele.Context) error {
 	text := strings.TrimSpace(c.Text())
+	// 如果是空消息或者是搜图指令，直接跳过
 	if text == "" || strings.HasPrefix(text, "/s") {
 		return nil
 	}
 
 	forceOriginal := false
+	// 直接以频道身份在评论区或频道内发送
 	if c.Message().SenderChat != nil && c.Message().SenderChat.Type == tele.ChatChannel {
 		forceOriginal = true
-	} else if c.Message().IsForwarded() && c.Message().OriginalChat != nil && c.Message().OriginalChat.Type == tele.ChatChannel {
+	}
+	if c.Message().IsForwarded() && c.Message().OriginalChat != nil && c.Message().OriginalChat.Type == tele.ChatChannel {
 		forceOriginal = true
 	}
 
 	// Twitter
 	if MatchTwitterURL(text) {
 		url := twitterPattern.FindString(text)
-
 		url = strings.Replace(url, "x.com/", "twitter.com/", 1)
-
-		workID := "twitter"
-		if matches := regexp.MustCompile(`status/(\d+)`).FindStringSubmatch(url); len(matches) > 1 {
-			workID = matches[1]
-		}
 
 		parseMode := "normal"
 		if strings.Contains(text, " -o") {
@@ -467,6 +464,11 @@ func handleMessage(c tele.Context) error {
 
 		stopAction := keepSendingAction(c, tele.UploadingDocument)
 		defer close(stopAction)
+
+		workID := "twitter"
+		if matches := regexp.MustCompile(`status/(\d+)`).FindStringSubmatch(url); len(matches) > 1 {
+			workID = matches[1]
+		}
 
 		images, textInfo := FetchTweetData(url, forceOriginal || parseMode != "normal")
 		if len(images) == 0 && textInfo == "" {
@@ -492,13 +494,13 @@ func handleMessage(c tele.Context) error {
 			workID = matches[1]
 		}
 
-		images, textInfo, parseMode := FetchPixivData(text)
+		images, textInfo, parseMode := FetchPixivData(text, forceOriginal)
 		if len(images) == 0 {
 			return c.Reply("喵~ Pixiv 作品抓不到, 可能被删掉或不公开")
 		}
 
 		addStats(1, len(images))
-		caption := makeMarkdownCaption("https://www.pixiv.net/artworks/"+regexp.MustCompile(`(\d+)`).FindString(text), textInfo, false)
+		caption := makeMarkdownCaption("https://www.pixiv.net/artworks/"+workID, textInfo, false)
 
 		if forceOriginal {
 			parseMode = "file_only"
@@ -549,11 +551,10 @@ func handleMessage(c tele.Context) error {
 		}
 
 		addStats(1, len(images))
-
 		caption := makeMarkdownCaption(url, textInfo, false)
 
-		if forceOriginal && parseMode == "normal" {
-			parseMode = "file_with_info"
+		if forceOriginal {
+			parseMode = "file_only"
 		}
 		return sendMedia(c, images, caption, parseMode, workID)
 	}
