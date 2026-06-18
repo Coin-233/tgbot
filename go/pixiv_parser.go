@@ -121,6 +121,8 @@ func FetchPixivData(urlStr string, forceOriginal bool) ([]string, string, string
 			Title       string `json:"title"`
 			Description string `json:"description"`
 			PageCount   int    `json:"pageCount"`
+			Width       int    `json:"width"`
+			Height      int    `json:"height"`
 			Tags        struct {
 				Tags []struct {
 					Tag string `json:"tag"`
@@ -157,6 +159,19 @@ func FetchPixivData(urlStr string, forceOriginal bool) ([]string, string, string
 		return nil, "", "normal"
 	}
 
+	isDimensionInvalid := false
+	if data.Body.Width > 0 && data.Body.Height > 0 {
+		// 宽+高总和不能超 10000
+		if data.Body.Width+data.Body.Height > 10000 {
+			isDimensionInvalid = true
+		}
+		// 宽高比不能超过 1:20
+		ratio := float64(data.Body.Height) / float64(data.Body.Width)
+		if ratio > 20 || ratio < 0.05 {
+			isDimensionInvalid = true
+		}
+	}
+
 	selectedPages := parsePageSelection(selectionRaw, totalPages)
 	suffix := ""
 	if len(selectedPages) == 0 {
@@ -179,21 +194,28 @@ func FetchPixivData(urlStr string, forceOriginal bool) ([]string, string, string
 		finalURL := currOrigURL
 
 		if parseMode == "normal" && currRegURL != "" {
-			headReq, _ := http.NewRequest("HEAD", currOrigURL, nil)
-			headReq.Header.Set("User-Agent", "Mozilla/5.0")
-			headReq.Header.Set("Referer", artworkURL)
-			if sessid := os.Getenv("PHPSESSID"); sessid != "" {
-				headReq.AddCookie(&http.Cookie{Name: "PHPSESSID", Value: strings.TrimSpace(sessid)})
-			}
+			needDowngrade := isDimensionInvalid
 
-			headClient := &http.Client{Timeout: 3 * time.Second}
-			headResp, headErr := headClient.Do(headReq)
-
-			if headErr == nil {
-				if headResp.ContentLength > 10*1024*1024 {
-					finalURL = currRegURL
+			if !needDowngrade {
+				headReq, _ := http.NewRequest("HEAD", currOrigURL, nil)
+				headReq.Header.Set("User-Agent", "Mozilla/5.0")
+				headReq.Header.Set("Referer", artworkURL)
+				if sessid := os.Getenv("PHPSESSID"); sessid != "" {
+					headReq.AddCookie(&http.Cookie{Name: "PHPSESSID", Value: strings.TrimSpace(sessid)})
 				}
-				headResp.Body.Close()
+
+				headClient := &http.Client{Timeout: 3 * time.Second}
+				headResp, headErr := headClient.Do(headReq)
+
+				if headErr == nil {
+					if headResp.ContentLength > 10*1024*1024 {
+						needDowngrade = true
+					}
+					headResp.Body.Close()
+				}
+			}
+			if needDowngrade {
+				finalURL = currRegURL
 			}
 		}
 
