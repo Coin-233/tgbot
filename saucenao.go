@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -19,7 +21,46 @@ type SauceNaoResult struct {
 	Thumbnail  string
 }
 
-var searchCache = make(map[string][]SauceNaoResult)
+const (
+	searchCacheTTL     = 30 * time.Minute
+	sauceImageMaxBytes = 20 * 1024 * 1024
+)
+
+type cachedSearch struct {
+	results   []SauceNaoResult
+	expiresAt time.Time
+}
+
+var searchCache = struct {
+	sync.Mutex
+	entries map[string]cachedSearch
+}{entries: make(map[string]cachedSearch)}
+
+func cacheSearchResults(id string, results []SauceNaoResult) {
+	now := time.Now()
+	searchCache.Lock()
+	defer searchCache.Unlock()
+	for key, cached := range searchCache.entries {
+		if now.After(cached.expiresAt) {
+			delete(searchCache.entries, key)
+		}
+	}
+	searchCache.entries[id] = cachedSearch{results: results, expiresAt: now.Add(searchCacheTTL)}
+}
+
+func getCachedSearchResults(id string) ([]SauceNaoResult, bool) {
+	searchCache.Lock()
+	defer searchCache.Unlock()
+	cached, ok := searchCache.entries[id]
+	if !ok {
+		return nil, false
+	}
+	if time.Now().After(cached.expiresAt) {
+		delete(searchCache.entries, id)
+		return nil, false
+	}
+	return cached.results, true
+}
 
 // 提取各类图库可能存在的标题和作者字段
 func getFlexibleString(m map[string]interface{}, keys ...string) string {
@@ -48,23 +89,42 @@ func searchSauceNAO(imageBytes []byte) ([]SauceNaoResult, error) {
 		return nil, fmt.Errorf("未配置 STOKEN")
 	}
 
-	url := "https://saucenao.com/search.php?output_type=2&numres=6&db=999&api_key=" + apiKey
+	if len(imageBytes) == 0 {
+		return nil, fmt.Errorf("图片内容为空")
+	}
+	if len(imageBytes) > sauceImageMaxBytes {
+		return nil, fmt.Errorf("图片超过 20MB 限制")
+	}
+
+	endpoint := "https://saucenao.com/search.php?output_type=2&numres=6&db=999&api_key=" + url.QueryEscape(apiKey)
 
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
-	part, _ := writer.CreateFormFile("file", "image.jpg")
-	part.Write(imageBytes)
-	writer.Close()
+	part, err := writer.CreateFormFile("file", "image.jpg")
+	if err != nil {
+		return nil, err
+	}
+	if _, err := part.Write(imageBytes); err != nil {
+		return nil, err
+	}
+	if err := writer.Close(); err != nil {
+		return nil, err
+	}
 
-	req, _ := http.NewRequest("POST", url, body)
+	req, err := http.NewRequest("POST", endpoint, body)
+	if err != nil {
+		return nil, err
+	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := slowHTTPClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("SauceNAO HTTP status %d", resp.StatusCode)
+	}
 
 	var data struct {
 		Results []struct {

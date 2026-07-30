@@ -6,12 +6,12 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
-	"time"
 )
 
 var (
-	twitterPattern = regexp.MustCompile(`(?:https?://)?(?:www\.)?(?:twitter|x)\.com/\w+/status/\d+`)
-	imgURLPattern  = regexp.MustCompile(`https?://pbs\.twimg\.com/media/([^.?]+)`)
+	twitterPattern   = regexp.MustCompile(`(?:https?://)?(?:www\.)?(?:twitter|x)\.com/\w+/status/\d+`)
+	tweetDataPattern = regexp.MustCompile(`(?:twitter|x)\.com/([^/]+)/status/(\d+)`)
+	imgURLPattern    = regexp.MustCompile(`https?://pbs\.twimg\.com/media/([^.?]+)`)
 )
 
 func MatchTwitterURL(text string) bool {
@@ -19,20 +19,21 @@ func MatchTwitterURL(text string) bool {
 }
 
 func FetchTweetData(urlStr string, forceOriginalFileOnly bool) ([]string, string) {
-	re := regexp.MustCompile(`(?:twitter|x)\.com/([^/]+)/status/(\d+)`)
-	matches := re.FindStringSubmatch(urlStr)
+	matches := tweetDataPattern.FindStringSubmatch(urlStr)
 	if len(matches) < 3 {
 		return nil, ""
 	}
 	user, tweetID := matches[1], matches[2]
 
 	apiURL := fmt.Sprintf("https://api.fxtwitter.com/%s/status/%s", user, tweetID)
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(apiURL)
-	if err != nil || resp.StatusCode != 200 {
+	resp, err := apiHTTPClient.Get(apiURL)
+	if err != nil {
 		return nil, ""
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, ""
+	}
 
 	var data struct {
 		Tweet struct {

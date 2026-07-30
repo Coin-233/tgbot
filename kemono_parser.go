@@ -6,10 +6,12 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
-	"time"
 )
 
-var kemonoPostPattern = regexp.MustCompile(`(?:https?://)?(?:www\.)?kemono\.cr/([^/]+)/user/([^/]+)/post/([^/\s]+)`)
+var (
+	kemonoPostPattern      = regexp.MustCompile(`(?:https?://)?(?:www\.)?kemono\.cr/([^/]+)/user/([^/]+)/post/([^/\s]+)`)
+	kemonoPostParamPattern = regexp.MustCompile(`(?:kemono\.cr/[^/]+/user/[^/]+/post/[^/\s]+)(.*)`)
+)
 
 func MatchKemonoPostURL(text string) bool {
 	return kemonoPostPattern.MatchString(text)
@@ -23,8 +25,7 @@ func FetchKemonoPostData(urlStr string) ([]string, string, string) {
 
 	service, userID, postID := matches[1], matches[2], matches[3]
 
-	re := regexp.MustCompile(`(?:kemono\.cr/[^/]+/user/[^/]+/post/[^/\s]+)(.*)`)
-	paramMatch := re.FindStringSubmatch(urlStr)
+	paramMatch := kemonoPostParamPattern.FindStringSubmatch(urlStr)
 	paramsStr := ""
 	if len(paramMatch) > 1 {
 		paramsStr = strings.TrimSpace(paramMatch[1])
@@ -42,16 +43,21 @@ func FetchKemonoPostData(urlStr string) ([]string, string, string) {
 
 	apiURL := fmt.Sprintf("https://kemono.cr/api/v1/%s/user/%s/post/%s", service, userID, postID)
 
-	req, _ := http.NewRequest("GET", apiURL, nil)
-	req.Header.Set("Accept", "text/css")
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return nil, "", "normal"
+	}
+	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "Mozilla/5.0")
 
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil || resp.StatusCode != 200 {
+	resp, err := apiHTTPClient.Do(req)
+	if err != nil {
 		return nil, "", "normal"
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", "normal"
+	}
 
 	var data struct {
 		Post struct {

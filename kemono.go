@@ -33,14 +33,16 @@ type KemonoProfile struct {
 }
 
 var (
-	kemonoCache []KemonoCreator
-	kemonoMutex sync.RWMutex
+	kemonoCache      []KemonoCreator
+	kemonoCacheReady bool
+	kemonoMutex      sync.RWMutex
 )
 
 func startKemonoUpdater() {
-	updateKemonoCache()
-	ticker := time.NewTicker(24 * time.Hour)
 	go func() {
+		updateKemonoCache()
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
 		for range ticker.C {
 			updateKemonoCache()
 		}
@@ -53,18 +55,17 @@ func updateKemonoCache() {
 		log.Printf("Kemono req error: %v", err)
 		return
 	}
-	req.Header.Set("Accept", "text/css")
+	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := slowHTTPClient.Do(req)
 	if err != nil {
 		log.Printf("Kemono fetch error: %v", err)
 		return
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		log.Printf("Kemono fetch bad status: %d", resp.StatusCode)
 		return
 	}
@@ -77,6 +78,7 @@ func updateKemonoCache() {
 
 	kemonoMutex.Lock()
 	kemonoCache = creators
+	kemonoCacheReady = true
 	kemonoMutex.Unlock()
 	log.Printf("Kemono cache updated, total creators: %d", len(creators))
 }
@@ -114,17 +116,16 @@ func fetchKemonoProfile(service, id string) (*KemonoProfile, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Accept", "text/css")
+	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "Mozilla/5.0")
 
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := apiHTTPClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HTTP status %d", resp.StatusCode)
 	}
 
@@ -149,6 +150,13 @@ func handleLookupCommand(c tele.Context) error {
 		targetName = strings.Join(args[1:], " ")
 	} else {
 		targetName = strings.Join(args, " ")
+	}
+
+	kemonoMutex.RLock()
+	cacheReady := kemonoCacheReady
+	kemonoMutex.RUnlock()
+	if !cacheReady {
+		return c.Reply("Kemono 作者索引正在同步, 请稍后再试")
 	}
 
 	results := searchKemonoCreators(targetName, targetService)

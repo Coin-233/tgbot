@@ -8,15 +8,17 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	tele "gopkg.in/telebot.v3"
 )
+
+var downloadHTTPClient = &http.Client{Timeout: 20 * time.Second}
 
 const startMessageMD = `发送 *Twitter*, *Pixiv* 或 *Bilibili动态* 链接，机器人将自动解析并发送图片\.
 
@@ -133,6 +135,14 @@ func sendMediaBatch(c tele.Context, images []string, caption string, parseMode s
 
 	var album tele.Album
 	lastIdx := len(images) - 1
+	extensions := make([]string, len(images))
+	forceAllDocuments := parseMode == "file_only" || parseMode == "file_with_info"
+	for i, imagePath := range images {
+		extensions[i] = mediaExtension(imagePath)
+		if !isVisualAlbumMedia(extensions[i]) {
+			forceAllDocuments = true
+		}
+	}
 
 	for i, imgPath := range images {
 		var file tele.File
@@ -142,27 +152,14 @@ func sendMediaBatch(c tele.Context, images []string, caption string, parseMode s
 			file = tele.FromURL(imgPath)
 		}
 
-		ext := ".jpg"
-		if parsedUrl, err := url.Parse(imgPath); err == nil {
-			if parsedExt := filepath.Ext(parsedUrl.Path); parsedExt != "" {
-				ext = strings.ToLower(parsedExt)
-			}
-		}
+		ext := extensions[i]
 
 		fileName := fmt.Sprintf("%s%s", workID, ext)
 		if len(images) > 1 {
 			fileName = fmt.Sprintf("%s_%d%s", workID, i+1, ext)
 		}
 
-		isMedia := false
-		switch ext {
-		case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".mp4":
-			isMedia = true
-		}
-
-		forceDocument := !isMedia || parseMode == "file_only" || parseMode == "file_with_info"
-
-		if forceDocument {
+		if forceAllDocuments {
 			doc := &tele.Document{File: file, FileName: fileName}
 			if i == lastIdx && caption != "" {
 				doc.Caption = caption
@@ -205,17 +202,51 @@ func sendMediaBatch(c tele.Context, images []string, caption string, parseMode s
 		}
 	}
 
-	for i := 0; i < len(album); i += 10 {
-		end := i + 10
-		if end > len(album) {
-			end = len(album)
-		}
-		err := c.SendAlbum(album[i:end], opts)
+	for _, batch := range mediaBatchRanges(len(album)) {
+		err := c.SendAlbum(album[batch.start:batch.end], opts)
 		if err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func mediaExtension(path string) string {
+	ext := ".jpg"
+	if parsedURL, err := url.Parse(path); err == nil {
+		if parsedExt := filepath.Ext(parsedURL.Path); parsedExt != "" {
+			ext = strings.ToLower(parsedExt)
+		}
+	}
+	return ext
+}
+
+func isVisualAlbumMedia(ext string) bool {
+	switch ext {
+	case ".jpg", ".jpeg", ".png", ".webp", ".mp4":
+		return true
+	default:
+		return false
+	}
+}
+
+type mediaBatchRange struct {
+	start int
+	end   int
+}
+
+func mediaBatchRanges(total int) []mediaBatchRange {
+	var batches []mediaBatchRange
+	for start := 0; start < total; {
+		remaining := total - start
+		size := min(10, remaining)
+		if remaining == 11 {
+			size = 9
+		}
+		batches = append(batches, mediaBatchRange{start: start, end: start + size})
+		start += size
+	}
+	return batches
 }
 
 // 本地下载并发送回退逻辑
@@ -229,19 +260,15 @@ func sendMediaWithFallback(c tele.Context, images []string, caption string, pars
 	}()
 
 	hasLargeFile := false
-	for _, imgURL := range images {
-		localPath, err := downloadImage(imgURL)
-		if err == nil {
-			fi, err := os.Stat(localPath)
-			if err == nil {
-				if fi.Size() > 10*1024*1024 {
-					hasLargeFile = true
-				}
-				localFiles = append(localFiles, localPath)
+	for i, result := range downloadMediaFiles(images) {
+		if result.err == nil {
+			if result.size > 10*1024*1024 {
+				hasLargeFile = true
 			}
+			localFiles = append(localFiles, result.path)
 		} else {
-			log.Printf("本地下载失败: %s, 错误: %v", imgURL, err)
-			if strings.Contains(err.Error(), "exceeds 50MB") {
+			log.Printf("本地下载失败: %s, 错误: %v", images[i], result.err)
+			if strings.Contains(result.err.Error(), "exceeds 50MB") {
 				caption += "\n\n_有一个文件超出了 Telegram 机器人的 50MB 限制, 已提前中断下载并跳过\\. _"
 			}
 		}
@@ -261,6 +288,47 @@ func sendMediaWithFallback(c tele.Context, images []string, caption string, pars
 	return sendMediaBatch(c, localFiles, caption, parseMode, true, workID)
 }
 
+type mediaDownload struct {
+	path string
+	size int64
+	err  error
+}
+
+func downloadMediaFiles(imageURLs []string) []mediaDownload {
+	results := make([]mediaDownload, len(imageURLs))
+	jobs := make(chan int)
+	workerCount := min(4, len(imageURLs))
+	var wg sync.WaitGroup
+
+	for range workerCount {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range jobs {
+				path, err := downloadImage(imageURLs[i])
+				if err != nil {
+					results[i].err = err
+					continue
+				}
+				info, err := os.Stat(path)
+				if err != nil {
+					os.Remove(path)
+					results[i].err = err
+					continue
+				}
+				results[i] = mediaDownload{path: path, size: info.Size()}
+			}
+		}()
+	}
+
+	for i := range imageURLs {
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
+	return results
+}
+
 // 将远端图片流式下载到本地服务器
 func downloadImage(imgURL string) (string, error) {
 	req, err := http.NewRequest("GET", imgURL, nil)
@@ -276,14 +344,13 @@ func downloadImage(imgURL string) (string, error) {
 		req.Header.Set("Referer", "https://kemono.cr/")
 	}
 
-	client := &http.Client{Timeout: 20 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := downloadHTTPClient.Do(req)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("bad status: %d", resp.StatusCode)
 	}
 
@@ -312,7 +379,10 @@ func downloadImage(imgURL string) (string, error) {
 		return "", err
 	}
 
-	tmpFile.Close()
+	if err := tmpFile.Close(); err != nil {
+		os.Remove(tmpFile.Name())
+		return "", err
+	}
 
 	if written > limitBytes {
 		os.Remove(tmpFile.Name())
@@ -325,13 +395,13 @@ func downloadImage(imgURL string) (string, error) {
 func main() {
 	_ = godotenv.Load()
 	loadStats()
-	startKemonoUpdater()
 
 	proxy := os.Getenv("PROXY")
 	if proxy != "" {
 		os.Setenv("HTTP_PROXY", proxy)
 		os.Setenv("HTTPS_PROXY", proxy)
 	}
+	startKemonoUpdater()
 
 	pref := tele.Settings{
 		Token:  os.Getenv("BOT_TOKEN"),
@@ -351,9 +421,9 @@ func main() {
 
 	// 命令: /stat
 	bot.Handle("/stat", func(c tele.Context) error {
-		globalStats.mu.Lock()
+		globalStats.mu.RLock()
 		msg := fmt.Sprintf("统计信息：\n• 总解析链接: %d 条\n• 总解析文件: %d 个", globalStats.TotalLinks, globalStats.TotalImages)
-		globalStats.mu.Unlock()
+		globalStats.mu.RUnlock()
 		return c.Reply(msg)
 	})
 
@@ -375,7 +445,10 @@ func main() {
 			return c.Reply("请回复一张图片, 或直接发送带图消息并附带 /s 指令")
 		}
 
-		statusMsg, _ := bot.Reply(c.Message(), "正在搜索 SauceNAO...")
+		statusMsg, err := bot.Reply(c.Message(), "正在搜索 SauceNAO...")
+		if err != nil {
+			return err
+		}
 
 		// 获取最高清的图片
 		photo := targetMsg.Photo.MediaFile()
@@ -386,7 +459,15 @@ func main() {
 		}
 		defer reader.Close()
 
-		imgBytes, _ := io.ReadAll(reader)
+		imgBytes, err := io.ReadAll(io.LimitReader(reader, sauceImageMaxBytes+1))
+		if err != nil {
+			bot.Edit(statusMsg, "读取图片失败")
+			return nil
+		}
+		if len(imgBytes) > sauceImageMaxBytes {
+			bot.Edit(statusMsg, "图片超过 20MB 限制")
+			return nil
+		}
 
 		results, err := searchSauceNAO(imgBytes)
 		if err != nil {
@@ -395,7 +476,7 @@ func main() {
 		}
 
 		searchID := uuid.New().String()[:8]
-		searchCache[searchID] = results
+		cacheSearchResults(searchID, results)
 
 		renderSauceNaoPage(bot, statusMsg, searchID, 0)
 		return nil
@@ -466,8 +547,8 @@ func handleMessage(c tele.Context) error {
 		defer close(stopAction)
 
 		workID := "twitter"
-		if matches := regexp.MustCompile(`status/(\d+)`).FindStringSubmatch(url); len(matches) > 1 {
-			workID = matches[1]
+		if matches := tweetDataPattern.FindStringSubmatch(url); len(matches) > 2 {
+			workID = matches[2]
 		}
 
 		images, textInfo := FetchTweetData(url, forceOriginal || parseMode != "normal")
@@ -490,7 +571,7 @@ func handleMessage(c tele.Context) error {
 		defer close(stopAction)
 
 		workID := "pixiv"
-		if matches := regexp.MustCompile(`(?:artworks/|illust_id=)(\d+)`).FindStringSubmatch(text); len(matches) > 1 {
+		if matches := pixivArtworkPattern.FindStringSubmatch(text); len(matches) > 1 {
 			workID = matches[1]
 		}
 
@@ -564,7 +645,7 @@ func handleMessage(c tele.Context) error {
 
 // 渲染 SauceNAO 搜图页面
 func renderSauceNaoPage(bot *tele.Bot, msg *tele.Message, searchID string, index int) {
-	results, ok := searchCache[searchID]
+	results, ok := getCachedSearchResults(searchID)
 	if !ok || len(results) == 0 {
 		bot.Edit(msg, "搜索结果已过期")
 		return

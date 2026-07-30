@@ -7,18 +7,19 @@ import (
 	"os"
 	"regexp"
 	"strings"
-	"time"
 )
 
-var bilibiliPattern = regexp.MustCompile(`(?:https?://)?(?:t\.bilibili\.com|(?:www\.)?bilibili\.com/opus)/(\d+)`)
+var (
+	bilibiliPattern     = regexp.MustCompile(`(?:https?://)?(?:t\.bilibili\.com|(?:www\.)?bilibili\.com/opus)/(\d+)`)
+	bilibiliDataPattern = regexp.MustCompile(`(?:https?://)?(?:t\.bilibili\.com|(?:www\.)?bilibili\.com/opus)/(\d+)(.*)`)
+)
 
 func MatchBilibiliURL(text string) bool {
 	return bilibiliPattern.MatchString(text)
 }
 
 func FetchBilibiliData(urlStr string) ([]string, string, string) {
-	re := regexp.MustCompile(`(?:https?://)?(?:t\.bilibili\.com|(?:www\.)?bilibili\.com/opus)/(\d+)(.*)`)
-	matches := re.FindStringSubmatch(urlStr)
+	matches := bilibiliDataPattern.FindStringSubmatch(urlStr)
 	if len(matches) < 3 {
 		return nil, "", "normal"
 	}
@@ -37,7 +38,10 @@ func FetchBilibiliData(urlStr string) ([]string, string, string) {
 	}
 
 	apiURL := fmt.Sprintf("https://api.bilibili.com/x/polymer/web-dynamic/v1/detail?id=%s&features=itemOpusStyle", dynamicID)
-	req, _ := http.NewRequest("GET", apiURL, nil)
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return nil, "", "normal"
+	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 	req.Header.Set("Referer", fmt.Sprintf("https://t.bilibili.com/%s", dynamicID))
 
@@ -54,12 +58,14 @@ func FetchBilibiliData(urlStr string) ([]string, string, string) {
 		req.AddCookie(&http.Cookie{Name: "DedeUserID__ckMd5", Value: strings.TrimSpace(uidMd5)})
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil || resp.StatusCode != 200 {
+	resp, err := apiHTTPClient.Do(req)
+	if err != nil {
 		return nil, "", "normal"
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", "normal"
+	}
 
 	var data struct {
 		Code int `json:"code"`

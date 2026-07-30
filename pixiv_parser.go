@@ -9,19 +9,24 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
+	"sync"
+)
+
+var (
+	pixivURLPattern       = regexp.MustCompile(`pixiv\.net/.*(?:artworks/|illust_id=)(\d+)`)
+	pixivArtworkPattern   = regexp.MustCompile(`(?:artworks/|illust_id=)(\d+)(.*)`)
+	pixivPageParamPattern = regexp.MustCompile(`\+([0-9,\-]+)(?:\s|$)`)
 )
 
 func MatchPixivURL(text string) bool {
-	match, _ := regexp.MatchString(`pixiv\.net/.*(?:artworks/|illust_id=)(\d+)`, text)
-	return match
+	return pixivURLPattern.MatchString(text)
 }
 
 func parsePageSelection(selectionRaw string, totalPages int) []int {
-	if selectionRaw == "" {
+	if selectionRaw == "" || totalPages < 1 {
 		return nil
 	}
-	selectedMap := make(map[int]bool)
+	selectedMap := make(map[int]struct{})
 	parts := strings.Split(selectionRaw, ",")
 
 	for _, part := range parts {
@@ -37,12 +42,20 @@ func parsePageSelection(selectionRaw string, totalPages int) []int {
 				if start > end {
 					start, end = end, start
 				}
+				if start < 1 {
+					start = 1
+				}
+				if end > totalPages {
+					end = totalPages
+				}
 				for i := start; i <= end; i++ {
-					selectedMap[i] = true
+					selectedMap[i] = struct{}{}
 				}
 			}
 		} else if val, err := strconv.Atoi(part); err == nil {
-			selectedMap[val] = true
+			if val >= 1 && val <= totalPages {
+				selectedMap[val] = struct{}{}
+			}
 		}
 	}
 
@@ -57,8 +70,7 @@ func parsePageSelection(selectionRaw string, totalPages int) []int {
 }
 
 func FetchPixivData(urlStr string, forceOriginal bool) ([]string, string, string) {
-	re := regexp.MustCompile(`(?:artworks/|illust_id=)(\d+)(.*)`)
-	matches := re.FindStringSubmatch(urlStr)
+	matches := pixivArtworkPattern.FindStringSubmatch(urlStr)
 	if len(matches) < 3 {
 		return nil, "", "normal"
 	}
@@ -92,15 +104,17 @@ func FetchPixivData(urlStr string, forceOriginal bool) ([]string, string, string
 	}
 
 	selectionRaw := ""
-	rePage := regexp.MustCompile(`\+([0-9,\-]+)(?:\s|$)`)
-	if pageMatch := rePage.FindStringSubmatch(paramsStr); len(pageMatch) > 1 {
+	if pageMatch := pixivPageParamPattern.FindStringSubmatch(paramsStr); len(pageMatch) > 1 {
 		selectionRaw = pageMatch[1]
 	}
 
 	apiURL := fmt.Sprintf("https://www.pixiv.net/ajax/illust/%s", illustID)
 	artworkURL := fmt.Sprintf("https://www.pixiv.net/artworks/%s", illustID)
 
-	req, _ := http.NewRequest("GET", apiURL, nil)
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return nil, "", "normal"
+	}
 	req.Header.Set("User-Agent", "Mozilla/5.0")
 	req.Header.Set("Referer", artworkURL)
 
@@ -108,12 +122,14 @@ func FetchPixivData(urlStr string, forceOriginal bool) ([]string, string, string
 		req.AddCookie(&http.Cookie{Name: "PHPSESSID", Value: strings.TrimSpace(sessid)})
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil || resp.StatusCode != 200 {
+	resp, err := apiHTTPClient.Do(req)
+	if err != nil {
 		return nil, "", "normal"
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", "normal"
+	}
 
 	var data struct {
 		Error bool `json:"error"`
@@ -174,7 +190,10 @@ func FetchPixivData(urlStr string, forceOriginal bool) ([]string, string, string
 
 	selectedPages := parsePageSelection(selectionRaw, totalPages)
 	suffix := ""
-	if len(selectedPages) == 0 {
+	if selectionRaw != "" && len(selectedPages) == 0 {
+		return nil, "", parseMode
+	}
+	if selectionRaw == "" {
 		for i := 1; i <= totalPages; i++ {
 			selectedPages = append(selectedPages, i)
 		}
@@ -186,40 +205,26 @@ func FetchPixivData(urlStr string, forceOriginal bool) ([]string, string, string
 		suffix = fmt.Sprintf(" %s/%d", strings.Join(pageStrs, ","), totalPages)
 	}
 
-	var images []string
-	for _, p := range selectedPages {
+	images := make([]string, len(selectedPages))
+	regularURLs := make([]string, len(selectedPages))
+	for i, p := range selectedPages {
 		pageIdx := p - 1
 		currOrigURL := strings.Replace(baseOrig, "_p0", fmt.Sprintf("_p%d", pageIdx), 1)
 		currRegURL := strings.Replace(baseReg, "_p0", fmt.Sprintf("_p%d", pageIdx), 1)
-		finalURL := currOrigURL
+		images[i] = currOrigURL
+		regularURLs[i] = currRegURL
+	}
 
-		if parseMode == "normal" && currRegURL != "" {
-			needDowngrade := isDimensionInvalid
-
-			if !needDowngrade {
-				headReq, _ := http.NewRequest("HEAD", currOrigURL, nil)
-				headReq.Header.Set("User-Agent", "Mozilla/5.0")
-				headReq.Header.Set("Referer", artworkURL)
-				if sessid := os.Getenv("PHPSESSID"); sessid != "" {
-					headReq.AddCookie(&http.Cookie{Name: "PHPSESSID", Value: strings.TrimSpace(sessid)})
-				}
-
-				headClient := &http.Client{Timeout: 3 * time.Second}
-				headResp, headErr := headClient.Do(headReq)
-
-				if headErr == nil {
-					if headResp.ContentLength > 10*1024*1024 {
-						needDowngrade = true
-					}
-					headResp.Body.Close()
+	if parseMode == "normal" {
+		if isDimensionInvalid {
+			for i, regularURL := range regularURLs {
+				if regularURL != "" {
+					images[i] = regularURL
 				}
 			}
-			if needDowngrade {
-				finalURL = currRegURL
-			}
+		} else {
+			downgradeOversizedPixivImages(images, regularURLs, artworkURL)
 		}
-
-		images = append(images, finalURL)
 	}
 
 	if onlyImage {
@@ -237,4 +242,47 @@ func FetchPixivData(urlStr string, forceOriginal bool) ([]string, string, string
 
 	text := strings.Join(parts, "\n")
 	return images, strings.TrimSpace(text), parseMode
+}
+
+func downgradeOversizedPixivImages(images, regularURLs []string, artworkURL string) {
+	jobs := make(chan int)
+	workerCount := min(4, len(images))
+	var wg sync.WaitGroup
+
+	for range workerCount {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range jobs {
+				if regularURLs[i] != "" && pixivImageTooLarge(images[i], artworkURL) {
+					images[i] = regularURLs[i]
+				}
+			}
+		}()
+	}
+
+	for i := range images {
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
+}
+
+func pixivImageTooLarge(imageURL, artworkURL string) bool {
+	req, err := http.NewRequest("HEAD", imageURL, nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+	req.Header.Set("Referer", artworkURL)
+	if sessid := strings.TrimSpace(os.Getenv("PHPSESSID")); sessid != "" {
+		req.AddCookie(&http.Cookie{Name: "PHPSESSID", Value: sessid})
+	}
+
+	resp, err := headHTTPClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode == http.StatusOK && resp.ContentLength > 10*1024*1024
 }

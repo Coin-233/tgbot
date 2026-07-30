@@ -2,9 +2,21 @@ package main
 
 import (
 	"html"
+	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
+)
+
+var (
+	apiHTTPClient    = &http.Client{Timeout: 15 * time.Second}
+	headHTTPClient   = &http.Client{Timeout: 3 * time.Second}
+	slowHTTPClient   = &http.Client{Timeout: 30 * time.Second}
+	htmlBreakPattern = regexp.MustCompile(`(?i)<\s*br\s*/?\s*>`)
+	htmlLinkPattern  = regexp.MustCompile(`(?i)<a [^>]*href=["']([^"']+)["'][^>]*>(.*?)</a>`)
+	htmlTagPattern   = regexp.MustCompile(`<[^>]+>`)
+	blankLinePattern = regexp.MustCompile(`\n{3,}`)
 )
 
 // 转义 MarkdownV2 保留字符
@@ -29,20 +41,16 @@ func htmlToMarkdownV2(rawHtml string) string {
 	text := html.UnescapeString(rawHtml)
 
 	// 替换 <br> 为换行
-	reBr := regexp.MustCompile(`(?i)<\s*br\s*/?\s*>`)
-	text = reBr.ReplaceAllString(text, "\n")
-
-	reA := regexp.MustCompile(`(?i)<a [^>]*href=["']([^"']+)["'][^>]*>(.*?)</a>`)
-	reTags := regexp.MustCompile(`<[^>]+>`)
+	text = htmlBreakPattern.ReplaceAllString(text, "\n")
 
 	var builder strings.Builder
 	lastIdx := 0
-	matches := reA.FindAllStringSubmatchIndex(text, -1)
+	matches := htmlLinkPattern.FindAllStringSubmatchIndex(text, -1)
 
 	for _, m := range matches {
 		// 处理 <a> 标签之前的普通文本 移除残留标签并彻底安全转义
 		preText := text[lastIdx:m[0]]
-		preText = reTags.ReplaceAllString(preText, "")
+		preText = htmlTagPattern.ReplaceAllString(preText, "")
 		builder.WriteString(escapeMDV2(preText))
 
 		// 处理 <a> 标签本身
@@ -58,7 +66,7 @@ func htmlToMarkdownV2(rawHtml string) string {
 			}
 		}
 
-		content = reTags.ReplaceAllString(content, "")
+		content = htmlTagPattern.ReplaceAllString(content, "")
 		content = escapeMDV2(content)
 
 		// URL 中的 ) 和 \ 必须转义
@@ -73,13 +81,13 @@ func htmlToMarkdownV2(rawHtml string) string {
 
 	// 处理最后一个 <a> 标签之后的普通文本
 	postText := text[lastIdx:]
-	postText = reTags.ReplaceAllString(postText, "")
+	postText = htmlTagPattern.ReplaceAllString(postText, "")
 	builder.WriteString(escapeMDV2(postText))
 
 	result := builder.String()
 
 	// 合并多个空行为两个换行
-	result = regexp.MustCompile(`\n{3,}`).ReplaceAllString(result, "\n\n")
+	result = blankLinePattern.ReplaceAllString(result, "\n\n")
 
 	return strings.TrimSpace(result)
 }
