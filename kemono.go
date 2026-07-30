@@ -55,7 +55,7 @@ func updateKemonoCache() {
 		log.Printf("Kemono req error: %v", err)
 		return
 	}
-	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept", "text/css")
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
 	resp, err := slowHTTPClient.Do(req)
@@ -116,7 +116,7 @@ func fetchKemonoProfile(service, id string) (*KemonoProfile, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept", "text/css")
 	req.Header.Set("User-Agent", "Mozilla/5.0")
 
 	resp, err := apiHTTPClient.Do(req)
